@@ -16,18 +16,22 @@ Questo documento copre **solo lo Scraper**, non la webapp di analisi.
 
 ## 3. Scoperta tecnica preliminare
 
-Verifica fatta sulla pagina di ricerca (`autoscout24.it/lst?...`):
+Verifica fatta su una pagina di ricerca (`autoscout24.it/lst/fiat?...`) e su una pagina di dettaglio con richieste HTTP semplici (`curl`, senza browser):
 
-- I dati degli annunci sono renderizzati **server-side**: nessun segnale di rendering solo-JS, nessuna sfida CAPTCHA/Cloudflare visibile in una richiesta semplice.
-- La **paginazione è limitata a 200 pagine per query** indipendentemente dal totale risultati (es. Fiat: 44.773 annunci totali ma solo ~200 pagine × ~20 risultati/pagina ≈ 4.000 raggiungibili in sequenza).
-- Conseguenza diretta: per marche con molti annunci occorre **suddividere la ricerca per modello** (e, se un singolo modello supera comunque ~4.000 risultati, ulteriormente per fascia di anno immatricolazione) per garantire copertura completa.
+- Entrambe le pagine sono renderizzate **server-side** (Next.js) e incorporano un tag `<script id="__NEXT_DATA__" type="application/json">` con **tutti i dati strutturati della pagina in JSON**, incluso l'elenco completo degli annunci (`pageProps.listings` nella pagina di ricerca) o il dettaglio completo (`pageProps.listingDetails` nella pagina di annuncio) — valori numerici già "raw" (prezzo, km, kW/CV, cilindrata), non stringhe formattate da parsare. Nessun segnale di rendering solo-JS lato client, nessuna sfida CAPTCHA/Cloudflare visibile in una richiesta semplice.
+- Ogni annuncio ha un identificatore stabile `id` (UUID), presente sia nello snippet che nel dettaglio e incluso nell'URL dell'annuncio — è la chiave primaria naturale per `listings`.
+- La pagina di dettaglio espone un campo `status` (es. `"Active"`) utile per la logica di rilevamento "venduto" (sezione 8).
+- La **paginazione è limitata a 200 pagine per query** indipendentemente dal totale risultati (es. Fiat: 44.772 annunci totali, `numberOfPages: 200`, ~20 risultati/pagina ≈ 4.000 raggiungibili in sequenza).
+- Conseguenza diretta: per marche con molti annunci occorre **suddividere la ricerca per modello** (parametro `mmmv` nell'URL, es. `mmmv=<makeId>|<modelId>||`) e, se un singolo modello supera comunque ~4.000 risultati, ulteriormente per fascia di anno immatricolazione (parametri `firstRegistrationFrom`/`firstRegistrationTo`, da confermare l'esatto nome nella query string durante l'implementazione).
 - **Vincolo di design importante:** il criterio di suddivisione **non deve mai essere il prezzo**, perché il prezzo è l'attributo che vogliamo tracciare nel tempo. Se un'auto cambiasse "bucket" di ricerca ogni volta che il prezzo cambia, genererebbe falsi "nuovo annuncio" / falsi "venduto".
 
-Questi limiti anti-bot reali (rate limit, eventuali CAPTCHA sotto carico) non sono ancora stati misurati sotto crawling sostenuto: la fase di calibrazione (sezione 6) serve proprio a quantificarli.
+**Conseguenza architetturale:** dato che i dati sono già disponibili come JSON strutturato lato server, **non è necessario un browser headless (Playwright)** né per la fase snippet né per la fase dettaglio: un client HTTP leggero con header realistici (`httpx`), che scarica la pagina ed estrae il JSON da `__NEXT_DATA__`, è sufficiente. Questo riduce drasticamente il carico (nessun rendering browser), la superficie di rilevamento anti-bot, e la complessità del codice (niente selettori CSS fragili).
+
+I limiti anti-bot reali sotto crawling sostenuto (rate limit, eventuali protezioni più sofisticate che scattano dopo centinaia/migliaia di richieste) **non sono ancora stati misurati**: verificarli con un test isolato ora, fuori dall'infrastruttura di backoff/monitoraggio pianificata, rischierebbe di far bloccare l'IP prima ancora di partire. La fase di calibrazione (sezione 6) è quindi un **task esplicito del piano di implementazione**, che aumenta gradualmente il ritmo delle richieste mentre l'infrastruttura di rilevamento blocchi/backoff/dashboard è già attiva e monitora l'esito.
 
 ## 4. Architettura e componenti
 
-- **Scraper engine** (Python + Playwright): per ogni marca configurata, esegue le ricerche (con lo split modello/anno necessario), estrae gli snippet, e visita le pagine di dettaglio delle auto nuove.
+- **Scraper engine** (Python + `httpx`): per ogni marca configurata, esegue le ricerche (con lo split modello/anno necessario), estrae i dati dal JSON `__NEXT_DATA__` delle pagine di ricerca, e visita le pagine di dettaglio (stesso meccanismo di estrazione) delle auto nuove. Nessuna dipendenza da browser headless nell'MVP; Playwright resta un'opzione di fallback futura solo se emergeranno protezioni che richiedono esecuzione JS reale (es. challenge JS-based), da rivalutare sulla base degli esiti della calibrazione.
 - **Scheduler interno** (APScheduler, incluso nel processo Python): decide quando far partire un nuovo giro di scraping per ciascuna marca. Nessuna dipendenza da Task Scheduler di Windows.
 - **PostgreSQL**: storicizzazione di annunci, prezzi, run ed eventi.
 - **Backend API** (FastAPI): espone stato/metriche per la dashboard, riceve i comandi manuali (avvio/pausa per marca).
@@ -37,23 +41,23 @@ Questi limiti anti-bot reali (rate limit, eventuali CAPTCHA sotto carico) non so
 
 Per ogni run di scraping di una marca:
 
-1. **Fase snippet (prioritaria, veloce).** Scorre tutte le pagine di ricerca risultanti dallo split modello/anno ed estrae i dati già presenti nello snippet: marca, modello, versione, prezzo, anno immatricolazione, km, alimentazione, potenza. Questa fase da sola copre già la maggior parte dei campi chiave necessari ad Auto-BI, quindi ha valore anche prima che la fase di dettaglio sia completata.
-2. **Fase dettaglio (in background, ritmo prudente).** Ogni annuncio mai visto prima viene messo in una coda per la visita alla pagina di dettaglio, che arricchisce il record con i campi rimanenti: provincia/comune, tipo venditore (privato/concessionario), colore, cilindrata, numero proprietari, IVA esposta, ecc. Questa coda viene processata a velocità sicura, senza bloccare l'avvio del prossimo giro di scraping della fase snippet.
+1. **Fase snippet (prioritaria, veloce).** Scorre tutte le pagine di ricerca risultanti dallo split modello/anno ed estrae i dati già presenti nel JSON `__NEXT_DATA__` di ogni pagina: marca, modello, versione, prezzo (raw numerico), anno/mese immatricolazione, km, alimentazione, cambio, potenza (kW/CV), località, tipo venditore. Questa fase da sola copre già la maggior parte dei campi chiave necessari ad Auto-BI, quindi ha valore anche prima che la fase di dettaglio sia completata.
+2. **Fase dettaglio (in background, ritmo prudente).** Ogni annuncio mai visto prima viene messo in una coda per la visita alla pagina di dettaglio (stesso meccanismo: fetch HTTP + estrazione `__NEXT_DATA__.props.pageProps.listingDetails`), che arricchisce il record con i campi rimanenti: coordinate geografiche, colore carrozzeria, cilindrata, numero posti/porte, cambio dettagliato (marce), consumi/emissioni WLTP, dettagli venditore, data di creazione annuncio, ecc. Questa coda viene processata a velocità sicura, senza bloccare l'avvio del prossimo giro di scraping della fase snippet.
 
 ## 6. Calibrazione del ritmo e della frequenza (x giorni)
 
 La frequenza dei run (ogni "x" giorni, come richiesto originariamente) **non è fissata a priori**: viene determinata empiricamente.
 
 - Il crawler parte con un ritmo conservativo: richieste sequenziali (non parallele) all'interno di una marca, delay randomico 3–8 secondi tra le richieste, pause più lunghe periodiche per simulare un pattern meno robotico.
-- Durante una fase iniziale di calibrazione, il sistema registra i segnali di blocco/rallentamento (HTTP 403, CAPTCHA, tempi di risposta anomali, rate limit espliciti) in funzione del ritmo di richieste.
+- Durante una fase iniziale di calibrazione — condotta **dentro** l'infrastruttura di scraping vera e propria (non con test isolati esterni), quindi con backoff e logging già attivi — il sistema aumenta gradualmente il ritmo di richieste nel tempo e registra i segnali di blocco/rallentamento (HTTP 403, CAPTCHA, redirect a pagine di verifica, tempi di risposta anomali, rate limit espliciti) in funzione del ritmo raggiunto. Questo permette di scoprire in modo controllato se e a quale volume autoscout24 introduce protezioni più sofisticate, senza rischiare un blocco immediato dell'unico IP disponibile.
 - Questi dati calibrano sia il ritmo per-richiesta sia la frequenza x tra un giro completo e il successivo per marca.
 - Dato il volume iniziale (decine di migliaia di annunci per marca nel primo run "baseline"), la prima scansione completa di dettaglio per tutte le marche MVP richiederà presumibilmente diversi giorni: questo è atteso e accettato, dato che la fase snippet fornisce comunque valore immediato.
 
 ## 7. Modello dati (schema DB)
 
-**`listings`** — stato corrente di ogni annuncio, chiave primaria = ID annuncio autoscout24 (estratto dall'URL).
+**`listings`** — stato corrente di ogni annuncio, chiave primaria = `id` (UUID) fornito da autoscout24, stabile tra snippet e dettaglio e presente nell'URL dell'annuncio.
 
-Campi: marca, modello, versione/allestimento, anno/mese immatricolazione, km, alimentazione, cambio, potenza (kW/CV), cilindrata, carrozzeria, colore, numero proprietari, provincia/comune, tipo venditore (privato/concessionario), prezzo corrente, IVA esposta (bool), url, `first_seen_at`, `last_seen_at`, `last_checked_at`, `status` (attivo/venduto/rimosso), `sold_at`, `detail_scraped` (bool), `raw_detail` (jsonb — campi grezzi di dettaglio non ancora normalizzati esplicitamente, per poter arricchire il modello senza bloccare lo scraping su ogni nuovo campo scoperto).
+Campi: `cross_reference_id` (ID numerico secondario, da `identifier.crossReferenceId`), marca, modello, versione/allestimento, anno/mese immatricolazione (da `firstRegistrationDateRaw`), km (da `mileageInKmRaw`), alimentazione, cambio, potenza kW/CV (da `rawPowerInKw`/`rawPowerInHp`), cilindrata (da `rawDisplacementInCCM`), carrozzeria, colore, numero proprietari, provincia/comune (da `location.city`, formato "Comune - Provincia - Sigla"), coordinate (`location.latitude`/`longitude`), tipo venditore (privato/concessionario, da `seller.type`), prezzo corrente (raw numerico), IVA esposta (bool), url, data creazione annuncio (da `createdTimestampWithOffset`), `first_seen_at`, `last_seen_at`, `last_checked_at`, `status` (attivo/venduto/rimosso — nostro stato interno, distinto dal campo `status` di autoscout24), `sold_at`, `detail_scraped` (bool), `raw_snippet`/`raw_detail` (jsonb — copia grezza dei blocchi JSON, per poter arricchire il modello con nuovi campi senza bloccare lo scraping).
 
 **`price_history`** — una riga per ogni variazione di prezzo osservata: `listing_id`, `prezzo`, `rilevato_il`.
 
@@ -68,7 +72,7 @@ Per ogni run di una marca, confrontiamo l'insieme degli ID annuncio trovati (att
 - **ID nuovo** → nuova riga in `listings`, prima riga in `price_history`, messo in coda per la visita di dettaglio.
 - **ID noto, prezzo invariato** → aggiornati solo `last_seen_at`/`last_checked_at`.
 - **ID noto, prezzo cambiato** → aggiornato il prezzo corrente e aggiunta una riga in `price_history`.
-- **ID noto ma non trovato in nessuna sotto-query del run corrente** → non marcato subito "venduto". Prima viene **verificata direttamente la pagina di dettaglio dell'annuncio**: se restituisce "annuncio non più disponibile" (404/pagina rimossa), si conferma `status = venduto`, si registra `sold_at` e si calcola la durata di permanenza sul mercato da `first_seen_at`. Se la pagina di dettaglio è invece ancora valida e raggiungibile, l'annuncio **non** viene marcato venduto: si registra un evento di anomalia (possibile falla di copertura nello split modello/anno) e l'annuncio resta attivo, da ricontrollare al giro successivo.
+- **ID noto ma non trovato in nessuna sotto-query del run corrente** → non marcato subito "venduto". Prima viene **verificata direttamente la pagina di dettaglio dell'annuncio** (fetch dell'url salvato): se la richiesta ritorna un errore HTTP (404/410) oppure il JSON viene restituito ma il campo `listingDetails.status` non è più `"Active"`, si conferma `status = venduto`, si registra `sold_at` e si calcola la durata di permanenza sul mercato da `first_seen_at`. Se invece la pagina di dettaglio risponde 200 con `status: "Active"`, l'annuncio **non** viene marcato venduto: si registra un evento di anomalia (possibile falla di copertura nello split modello/anno) e l'annuncio resta attivo, da ricontrollare al giro successivo.
 
 Questo doppio controllo evita falsi "venduto" dovuti a riordinamenti dei risultati di ricerca o a casi limite nei bucket di split.
 
@@ -90,7 +94,7 @@ Frontend React (dietro l'API FastAPI), con:
 
 ## 11. Testing
 
-- **Unit test** su parsing di snippet e pagina di dettaglio, e sulla logica di split modello/anno, usando fixture HTML salvate localmente (nessuna dipendenza da rete nei test).
+- **Unit test** su parsing dei blocchi JSON `__NEXT_DATA__` (snippet e dettaglio) e sulla logica di split modello/anno, usando fixture JSON/HTML reali salvate localmente (nessuna dipendenza da rete nei test).
 - **Unit test** sulla logica di rilevamento nuovo/prezzo cambiato/venduto contro un Postgres di test (container dedicato).
 - **Test di integrazione leggeri** su un sottoinsieme reale limitato (es. un solo modello, poche pagine) per validare la pipeline end-to-end senza sovraccaricare autoscout24 durante lo sviluppo.
 - Nessun test end-to-end automatizzato continuo contro il sito reale in CI, per non consumare la "quota" di richieste sicure: la validazione contro il sito reale avviene manualmente/con run mirati durante la fase di calibrazione.
