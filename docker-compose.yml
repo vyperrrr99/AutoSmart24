@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: autosmart24
+      POSTGRES_PASSWORD: autosmart24
+      POSTGRES_DB: autosmart24
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
