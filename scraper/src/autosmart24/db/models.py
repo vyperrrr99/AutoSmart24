@@ -19,7 +19,7 @@ class Listing(Base):
     __tablename__ = "listings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    cross_reference_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cross_reference_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     brand: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)

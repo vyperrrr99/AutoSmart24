@@ -1,5 +1,6 @@
 import datetime as dt
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from autosmart24.config import BrandConfig
@@ -307,6 +308,66 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
     assert run.new_listings == 5
     all_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
     assert all_ids == {"batch-1", "batch-2", "batch-3", "batch-4", "batch-5"}
+
+
+def test_listing_accepts_cross_reference_id_longer_than_32_chars(db_session):
+    """cross_reference_id is opaque, dealer/site-supplied data with no length
+    guarantee from us; the column was widened from VARCHAR(32) to
+    VARCHAR(128) after a real dealer id exceeded 32 chars and crashed a
+    production sweep. This guards against the ORM model regressing back to
+    a too-narrow column."""
+    now = dt.datetime.utcnow()
+    long_id = "x" * 100
+    assert len(long_id) > 32
+
+    db_session.add(
+        Listing(
+            id="cross-ref-long-1",
+            cross_reference_id=long_id,
+            brand="Fiat",
+            price=15000,
+            url="https://www.autoscout24.it/annunci/cross-ref-long-1",
+            first_seen_at=now,
+            last_seen_at=now,
+            last_checked_at=now,
+            status="active",
+            detail_scraped=False,
+        )
+    )
+    db_session.commit()
+
+    fetched = db_session.get(Listing, "cross-ref-long-1")
+    assert fetched.cross_reference_id == long_id
+
+
+def test_run_brand_sweep_marks_error_and_preserves_partial_state_on_unexpected_exception(db_session):
+    """An unexpected (non-BlockedError) exception raised mid-sweep -- after
+    at least one batch has already been committed -- must not leave the
+    ScrapeRun stuck at status='running' forever (a "zombie" run,
+    indistinguishable on the dashboard from a legitimately long-running
+    sweep). It should be marked status='error', with partial counters and
+    the already-committed listings preserved, and the original exception
+    must still propagate for operator visibility in logs."""
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("safe-1", 1000)
+        yield _fake_snippet("safe-2", 2000)
+        raise ValueError("boom - unexpected crawler failure")
+
+    with pytest.raises(ValueError, match="boom"):
+        run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+
+    run = db_session.query(ScrapeRun).filter_by(brand="Fiat").one()
+    assert run.status == "error"
+    assert run.finished_at is not None
+    assert run.listings_seen == 2
+    assert run.new_listings == 2
+
+    surviving_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
+    assert surviving_ids == {"safe-1", "safe-2"}
+
+    events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
+    assert any(e.level == "error" and "boom" in e.message for e in events)
 
 
 def test_run_brand_sweep_preserves_committed_batches_on_block(db_session):
