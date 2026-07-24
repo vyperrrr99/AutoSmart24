@@ -34,3 +34,4 @@ body {
 .status-in-pausa { background: #713f12; }
 .status-bloccato { background: #7f1d1d; }
 .status-in-esecuzione { background: #1e3a8a; }
+.status-errore { background: #991b1b; }

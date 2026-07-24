@@ -362,6 +362,7 @@ def test_run_brand_sweep_marks_error_and_preserves_partial_state_on_unexpected_e
     assert run.finished_at is not None
     assert run.listings_seen == 2
     assert run.new_listings == 2
+    assert run.errors_count == 1
 
     surviving_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
     assert surviving_ids == {"safe-1", "safe-2"}

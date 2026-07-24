@@ -274,6 +274,7 @@ def run_brand_sweep(
         run.listings_seen = listings_seen
         run.new_listings = len(new_ids)
         run.price_changes = price_changes
+        run.errors_count += 1
         message = f"Unexpected error during sweep: {exc}"
         if len(message) > 2048:
             message = message[:2048]

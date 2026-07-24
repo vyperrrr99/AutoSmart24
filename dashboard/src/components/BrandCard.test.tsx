@@ -33,4 +33,10 @@ describe("BrandCard", () => {
     expect(screen.getByText("In pausa")).toBeInTheDocument();
     expect(screen.getByText("Riprendi")).toBeInTheDocument();
   });
+
+  it("shows Errore status when last run status is error", () => {
+    const erroredBrand = { ...brand, last_run: { ...brand.last_run!, status: "error", errors_count: 1 } };
+    render(<BrandCard brand={erroredBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText("Errore")).toBeInTheDocument();
+  });
 });

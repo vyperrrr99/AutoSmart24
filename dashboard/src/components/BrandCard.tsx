@@ -11,6 +11,7 @@ interface BrandCardProps {
 function statusLabel(brand: BrandStatusOut): string {
   if (brand.paused) return "In pausa";
   if (brand.last_run?.status === "blocked") return "Bloccato";
+  if (brand.last_run?.status === "error") return "Errore";
   if (brand.last_run?.status === "running") return "In esecuzione";
   return "Attivo";
 }
