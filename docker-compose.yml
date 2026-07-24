@@ -22,5 +22,15 @@ services:
     ports:
       - "8001:8000"
 
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_API_BASE_URL: http://localhost:8001
+    depends_on:
+      - app
+    ports:
+      - "5173:80"
+
 volumes:
   postgres_data:
