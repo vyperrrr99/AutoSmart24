@@ -1,9 +1,37 @@
 from __future__ import annotations
 
+import threading
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from autosmart24.config import BrandConfig
+
+
+class BrandRunGuard:
+    """Thread-safe guard preventing concurrent sweeps of the same brand.
+
+    APScheduler's per-job single-instance protection only applies within a
+    single job id. A manual "run now" job (a distinct job id per invocation)
+    can otherwise execute concurrently with the recurring scheduled job for
+    the same brand, or with another manual trigger. This guard tracks
+    in-progress brands independently of job ids.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running: set[str] = set()
+
+    def try_acquire(self, brand_slug: str) -> bool:
+        with self._lock:
+            if brand_slug in self._running:
+                return False
+            self._running.add(brand_slug)
+            return True
+
+    def release(self, brand_slug: str) -> None:
+        with self._lock:
+            self._running.discard(brand_slug)
 
 
 class BrandScheduler:

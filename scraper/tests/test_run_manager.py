@@ -1,8 +1,8 @@
 import datetime as dt
 
 from autosmart24.config import BrandConfig
-from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent
-from autosmart24.run_manager import run_brand_sweep
+from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
+from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 
@@ -112,6 +112,7 @@ def test_run_brand_sweep_keeps_active_when_detail_still_active(db_session):
     assert listing.status == "active"
     events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
     assert any(e.level == "warning" for e in events)
+    assert run.errors_count == 1
 
 
 def test_run_brand_sweep_marks_blocked_on_blocked_error(db_session):
@@ -169,3 +170,90 @@ def test_run_brand_sweep_excludes_same_run_new_listings_from_backlog(db_session)
     assert listing.detail_scraped is False
     assert listing.status == "active"
     assert listing.url not in called_with
+
+
+def test_run_brand_sweep_marks_blocked_and_stops_on_block_during_missing_ids_loop(db_session):
+    db_session.add(_existing_listing("missing-a", 10000))
+    db_session.add(_existing_listing("missing-b", 20000))
+    db_session.commit()
+
+    call_count = {"n": 0}
+
+    def fake_crawl(client, brand_slug, make_id):
+        return iter(())
+
+    def fake_fetch_detail(client, url):
+        call_count["n"] += 1
+        raise BlockedError(403, url)
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.status == "blocked"
+    assert call_count["n"] == 1
+
+
+def test_run_brand_sweep_marks_blocked_on_block_during_detail_backlog(db_session):
+    db_session.add(_existing_listing("pending-blocked", 10000, detail_scraped=False))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("pending-blocked", 10000)
+
+    def fake_fetch_detail(client, url):
+        raise BlockedError(403, url)
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.status == "blocked"
+
+
+def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
+    db_session.add(_existing_listing("anomaly-a", 10000))
+    db_session.add(_existing_listing("anomaly-b", 20000))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id):
+        return iter(())
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data={"source_status": "Active"})
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.errors_count == 2
+
+
+def test_process_detail_backlog_returns_sold_count(db_session):
+    db_session.add(_existing_listing("backlog-sold-1", 10000, detail_scraped=False))
+    db_session.commit()
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=True)
+
+    sold = process_detail_backlog(db_session, _client(), BRAND, run, fetch_detail_fn=fake_fetch_detail)
+
+    assert sold == 1
+
+
+def test_run_brand_sweep_counts_backlog_confirmed_sold_in_sold_detected(db_session):
+    # Listing is still present in the current sweep (so it does NOT go through the
+    # missing_ids/sold-confirmation loop) but hasn't had its detail page scraped yet,
+    # so it is picked up by the detail backlog pass, where the detail page reveals
+    # it as sold.
+    db_session.add(_existing_listing("backlog-sold-2", 10000, detail_scraped=False))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("backlog-sold-2", 10000)
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.sold_detected == 1
+    listing = db_session.get(Listing, "backlog-sold-2")
+    assert listing.status == "sold"

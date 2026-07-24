@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -10,6 +12,8 @@ from autosmart24.api.schemas import BrandStatusOut, EventOut, RunOut
 from autosmart24.config import BrandConfig, MVP_BRANDS
 from autosmart24.db.models import ScrapeEvent, ScrapeRun
 from autosmart24.scheduler import BrandScheduler
+
+DEFAULT_CORS_ALLOW_ORIGINS = "http://localhost:5173"
 
 
 def _find_brand(brand_slug: str) -> BrandConfig:
@@ -25,6 +29,18 @@ def create_app(
     run_now_fn: Callable[[BrandConfig], None],
 ) -> FastAPI:
     app = FastAPI(title="AutoSmart24 Scraper API")
+
+    allow_origins = [
+        origin.strip()
+        for origin in os.environ.get("CORS_ALLOW_ORIGINS", DEFAULT_CORS_ALLOW_ORIGINS).split(",")
+        if origin.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
 
     def get_session():
         session = session_factory()

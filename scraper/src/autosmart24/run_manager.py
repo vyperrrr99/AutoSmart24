@@ -33,7 +33,7 @@ def process_detail_backlog(
     batch_size: int = DETAIL_BATCH_SIZE,
     fetch_detail_fn=fetch_detail,
     exclude_ids: set[str] = frozenset(),
-) -> None:
+) -> int:
     pending = session.execute(
         select(Listing)
         .where(
@@ -47,7 +47,7 @@ def process_detail_backlog(
     ).scalars().all()
 
     if not pending:
-        return
+        return 0
 
     enriched = 0
     sold = 0
@@ -57,6 +57,8 @@ def process_detail_backlog(
         try:
             result = fetch_detail_fn(client, row.url)
         except BlockedError as exc:
+            run.status = "blocked"
+            run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
             break
 
@@ -95,6 +97,8 @@ def process_detail_backlog(
         session, run, "info",
         f"Detail backlog batch: enriched {enriched}, confirmed sold {sold} (batch size {len(pending)})",
     )
+
+    return sold
 
 
 def run_brand_sweep(
@@ -180,8 +184,10 @@ def run_brand_sweep(
         try:
             result = fetch_detail_fn(client, row.url)
         except BlockedError as exc:
+            run.status = "blocked"
+            run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
-            continue
+            break
 
         row.last_checked_at = now
         if result.sold:
@@ -189,19 +195,23 @@ def run_brand_sweep(
             row.sold_at = now
             sold_count += 1
         else:
+            run.errors_count += 1
             _log_event(
                 session, run, "warning",
                 f"Listing {listing_id} not found in sweep but still active on detail page",
                 url=row.url,
             )
 
-    process_detail_backlog(session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=diff.new_ids)
+    backlog_sold_count = process_detail_backlog(
+        session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=diff.new_ids
+    )
 
     run.listings_seen = len(current_snippets)
     run.new_listings = len(diff.new_ids)
     run.price_changes = len(diff.price_changed)
-    run.sold_detected = sold_count
-    run.status = "success"
+    run.sold_detected = sold_count + backlog_sold_count
+    if run.status != "blocked":
+        run.status = "success"
     run.finished_at = _now()
 
     session.commit()

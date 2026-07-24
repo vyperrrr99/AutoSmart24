@@ -77,3 +77,13 @@ def test_unknown_brand_returns_404(db_session):
 
     response = client.get("/brands/unknown-brand/runs")
     assert response.status_code == 404
+
+
+def test_cors_header_present_for_allowed_origin(db_session):
+    app, _ = _app_with_session(db_session)
+    client = TestClient(app)
+
+    response = client.get("/brands", headers={"Origin": "http://localhost:5173"})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
