@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BrandCard } from "./components/BrandCard";
+import { BrandDetail } from "./components/BrandDetail";
 import { fetchBrands, pauseBrand, resumeBrand, runBrandNow } from "./api";
 import type { BrandStatusOut } from "./types";
 
@@ -49,11 +50,7 @@ export function App() {
           />
         ))}
       </div>
-      {selectedSlug && (
-        <p style={{ opacity: 0.7 }}>
-          Dettaglio per "{selectedSlug}" — vedi BrandDetail (Task 18).
-        </p>
-      )}
+      {selectedSlug && <BrandDetail brandSlug={selectedSlug} onClose={() => setSelectedSlug(null)} />}
     </div>
   );
 }
