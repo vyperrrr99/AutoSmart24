@@ -1,5 +1,7 @@
 import datetime as dt
 
+from sqlalchemy.orm import sessionmaker
+
 from autosmart24.config import BrandConfig
 from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
@@ -257,3 +259,71 @@ def test_run_brand_sweep_counts_backlog_confirmed_sold_in_sold_detected(db_sessi
     assert run.sold_detected == 1
     listing = db_session.get(Listing, "backlog-sold-2")
     assert listing.status == "sold"
+
+
+def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
+    """The ScrapeRun row (status='running') must be visible to another DB
+    connection as soon as the sweep starts, not only once the whole sweep
+    finishes. We assert this from inside the crawl generator itself, before
+    it has yielded anything, using a second session on the same engine."""
+
+    def fake_crawl(client, brand_slug, make_id):
+        other = sessionmaker(bind=db_session.bind)()
+        try:
+            run = other.query(ScrapeRun).filter_by(brand="Fiat").one()
+            assert run.status == "running"
+        finally:
+            other.close()
+        yield _fake_snippet("early-visible-1", 5000)
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl)
+
+    assert run.status == "success"
+
+
+def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
+    """With a small batch_size, earlier batches must be committed (and thus
+    visible via another session) before the crawl generator has finished
+    yielding all listings."""
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("batch-1", 1000)
+        yield _fake_snippet("batch-2", 2000)
+
+        other = sessionmaker(bind=db_session.bind)()
+        try:
+            ids = {row.id for row in other.query(Listing).filter_by(brand="Fiat").all()}
+            assert ids == {"batch-1", "batch-2"}
+        finally:
+            other.close()
+
+        yield _fake_snippet("batch-3", 3000)
+        yield _fake_snippet("batch-4", 4000)
+        yield _fake_snippet("batch-5", 5000)
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+
+    assert run.status == "success"
+    assert run.new_listings == 5
+    all_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
+    assert all_ids == {"batch-1", "batch-2", "batch-3", "batch-4", "batch-5"}
+
+
+def test_run_brand_sweep_preserves_committed_batches_on_block(db_session):
+    """A BlockedError raised mid-crawl (after at least one full batch has
+    already been committed) must leave that batch's listings durably in the
+    DB and reflected in the run's partial counters, instead of discarding
+    the whole sweep."""
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("survivor-1", 1000)
+        yield _fake_snippet("survivor-2", 2000)
+        raise BlockedError(403, "https://www.autoscout24.it/lst/fiat")
+
+    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+
+    assert run.status == "blocked"
+    assert run.new_listings == 2
+    assert run.listings_seen == 2
+    surviving_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
+    assert surviving_ids == {"survivor-1", "survivor-2"}

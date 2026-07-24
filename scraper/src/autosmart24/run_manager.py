@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import itertools
+from typing import Iterable, Iterator
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from autosmart24.scraping.detail_queue import fetch_detail
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 
 DETAIL_BATCH_SIZE = 50
+NEW_LISTING_COMMIT_BATCH_SIZE = 100
 
 
 def _now() -> dt.datetime:
@@ -101,29 +104,26 @@ def process_detail_backlog(
     return sold
 
 
+def _iter_batches(iterable: Iterable[dict], batch_size: int) -> Iterator[list[dict]]:
+    it = iter(iterable)
+    while True:
+        batch = list(itertools.islice(it, batch_size))
+        if not batch:
+            return
+        yield batch
+
+
 def run_brand_sweep(
     session: Session,
     client: RateLimitedClient,
     brand: BrandConfig,
     crawl_fn=crawl_brand,
     fetch_detail_fn=fetch_detail,
+    batch_size: int = NEW_LISTING_COMMIT_BATCH_SIZE,
 ) -> ScrapeRun:
     run = ScrapeRun(brand=brand.display_name, started_at=_now(), status="running")
     session.add(run)
-    session.flush()
-
-    try:
-        current_snippets: dict[str, dict] = {}
-        for snippet in crawl_fn(client, brand.slug, brand.make_id):
-            current_snippets[snippet["id"]] = snippet
-    except BlockedError as exc:
-        run.status = "blocked"
-        run.finished_at = _now()
-        _log_event(session, run, "blocked", str(exc), url=exc.url)
-        session.commit()
-        return run
-
-    current_prices = {listing_id: s["price"] for listing_id, s in current_snippets.items()}
+    session.commit()
 
     active_rows = session.execute(
         select(Listing).where(Listing.brand == brand.display_name, Listing.status == "active")
@@ -131,55 +131,89 @@ def run_brand_sweep(
     active_db_prices = {row.id: row.price for row in active_rows}
     active_rows_by_id = {row.id: row for row in active_rows}
 
-    diff = diff_sweep(current_prices, active_db_prices)
-    now = _now()
+    seen_ids: set[str] = set()
+    new_ids: set[str] = set()
+    listings_seen = 0
+    price_changes = 0
 
-    for listing_id in diff.new_ids:
-        snippet = current_snippets[listing_id]
-        session.add(
-            Listing(
-                id=listing_id,
-                cross_reference_id=snippet["cross_reference_id"],
-                brand=snippet["brand"] or brand.display_name,
-                model=snippet["model"],
-                model_group=snippet["model_group"],
-                variant=snippet["variant"],
-                motor_type_name=snippet["motor_type_name"],
-                version_input=snippet["version_input"],
-                transmission=snippet["transmission"],
-                fuel=snippet["fuel"],
-                first_registration=snippet["first_registration"],
-                mileage_km=snippet["mileage_km"],
-                seller_type=snippet["seller_type"],
-                seller_company_name=snippet["seller_company_name"],
-                city=snippet["city"],
-                zip_code=snippet["zip_code"],
-                price=snippet["price"],
-                url=snippet["url"],
-                first_seen_at=now,
-                last_seen_at=now,
-                last_checked_at=now,
-                status="active",
-                detail_scraped=False,
-                raw_snippet=snippet["raw_snippet"],
-            )
-        )
-        session.add(PriceHistory(listing_id=listing_id, price=snippet["price"], recorded_at=now))
+    try:
+        for batch in _iter_batches(crawl_fn(client, brand.slug, brand.make_id), batch_size):
+            batch_snippets = {s["id"]: s for s in batch}
+            batch_prices = {listing_id: s["price"] for listing_id, s in batch_snippets.items()}
+            diff = diff_sweep(batch_prices, active_db_prices)
+            now = _now()
 
-    for listing_id, new_price in diff.price_changed.items():
-        row = active_rows_by_id[listing_id]
-        row.price = new_price
-        row.last_seen_at = now
-        row.last_checked_at = now
-        session.add(PriceHistory(listing_id=listing_id, price=new_price, recorded_at=now))
+            for listing_id in diff.new_ids:
+                if listing_id in new_ids:
+                    # Same listing seen again in a later batch of this same
+                    # sweep (shouldn't normally happen given how crawl_fn
+                    # partitions queries, but guard against a duplicate
+                    # insert/PriceHistory row rather than crashing).
+                    continue
+                snippet = batch_snippets[listing_id]
+                session.add(
+                    Listing(
+                        id=listing_id,
+                        cross_reference_id=snippet["cross_reference_id"],
+                        brand=snippet["brand"] or brand.display_name,
+                        model=snippet["model"],
+                        model_group=snippet["model_group"],
+                        variant=snippet["variant"],
+                        motor_type_name=snippet["motor_type_name"],
+                        version_input=snippet["version_input"],
+                        transmission=snippet["transmission"],
+                        fuel=snippet["fuel"],
+                        first_registration=snippet["first_registration"],
+                        mileage_km=snippet["mileage_km"],
+                        seller_type=snippet["seller_type"],
+                        seller_company_name=snippet["seller_company_name"],
+                        city=snippet["city"],
+                        zip_code=snippet["zip_code"],
+                        price=snippet["price"],
+                        url=snippet["url"],
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        last_checked_at=now,
+                        status="active",
+                        detail_scraped=False,
+                        raw_snippet=snippet["raw_snippet"],
+                    )
+                )
+                session.add(PriceHistory(listing_id=listing_id, price=snippet["price"], recorded_at=now))
 
-    for listing_id in diff.unchanged_ids:
-        row = active_rows_by_id[listing_id]
-        row.last_seen_at = now
-        row.last_checked_at = now
+            for listing_id, new_price in diff.price_changed.items():
+                row = active_rows_by_id[listing_id]
+                row.price = new_price
+                row.last_seen_at = now
+                row.last_checked_at = now
+                session.add(PriceHistory(listing_id=listing_id, price=new_price, recorded_at=now))
+
+            for listing_id in diff.unchanged_ids:
+                row = active_rows_by_id[listing_id]
+                row.last_seen_at = now
+                row.last_checked_at = now
+
+            seen_ids.update(batch_snippets.keys())
+            new_ids.update(diff.new_ids)
+            listings_seen += len(batch_snippets)
+            price_changes += len(diff.price_changed)
+
+            session.commit()
+    except BlockedError as exc:
+        run.status = "blocked"
+        run.listings_seen = listings_seen
+        run.new_listings = len(new_ids)
+        run.price_changes = price_changes
+        run.finished_at = _now()
+        _log_event(session, run, "blocked", str(exc), url=exc.url)
+        session.commit()
+        return run
+
+    missing_ids = set(active_db_prices.keys()) - seen_ids
 
     sold_count = 0
-    for listing_id in diff.missing_ids:
+    now = _now()
+    for listing_id in missing_ids:
         row = active_rows_by_id[listing_id]
         try:
             result = fetch_detail_fn(client, row.url)
@@ -203,12 +237,12 @@ def run_brand_sweep(
             )
 
     backlog_sold_count = process_detail_backlog(
-        session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=diff.new_ids
+        session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=new_ids
     )
 
-    run.listings_seen = len(current_snippets)
-    run.new_listings = len(diff.new_ids)
-    run.price_changes = len(diff.price_changed)
+    run.listings_seen = listings_seen
+    run.new_listings = len(new_ids)
+    run.price_changes = price_changes
     run.sold_detected = sold_count + backlog_sold_count
     if run.status != "blocked":
         run.status = "success"
