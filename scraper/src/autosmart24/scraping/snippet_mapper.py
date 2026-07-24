@@ -8,8 +8,13 @@ from autosmart24.config import BASE_URL
 def _parse_first_registration(value: str | None) -> dt.date | None:
     if not value:
         return None
-    month_str, year_str = value.split("-")
-    return dt.date(int(year_str), int(month_str), 1)
+    parts = value.split("-")
+    if len(parts) == 2:
+        month_str, year_str = parts
+        return dt.date(int(year_str), int(month_str), 1)
+    if len(parts) == 1 and parts[0].isdigit():
+        return dt.date(int(parts[0]), 1, 1)
+    return None
 
 
 def _parse_int(value: str | None) -> int | None:

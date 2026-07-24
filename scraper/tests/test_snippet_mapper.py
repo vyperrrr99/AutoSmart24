@@ -47,3 +47,35 @@ def test_map_snippet_listing_handles_missing_tracking_gracefully():
     assert mapped["price"] is None
     assert mapped["mileage_km"] is None
     assert mapped["first_registration"] is None
+
+
+def test_map_snippet_listing_handles_year_only_first_registration():
+    raw = {
+        "id": "zzz",
+        "crossReferenceId": None,
+        "url": "/annunci/zzz",
+        "price": {},
+        "vehicle": {},
+        "location": {},
+        "seller": {},
+        "tracking": {"firstRegistration": "1977"},
+    }
+    mapped = map_snippet_listing(raw)
+
+    assert mapped["first_registration"].isoformat() == "1977-01-01"
+
+
+def test_map_snippet_listing_handles_unparseable_first_registration_gracefully():
+    raw = {
+        "id": "zzz",
+        "crossReferenceId": None,
+        "url": "/annunci/zzz",
+        "price": {},
+        "vehicle": {},
+        "location": {},
+        "seller": {},
+        "tracking": {"firstRegistration": "not-a-date-at-all"},
+    }
+    mapped = map_snippet_listing(raw)
+
+    assert mapped["first_registration"] is None
