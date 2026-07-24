@@ -150,3 +150,22 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
     assert listing.detail_scraped is True
     assert listing.power_kw == 74
     assert listing.price == 10500
+
+
+def test_run_brand_sweep_excludes_same_run_new_listings_from_backlog(db_session):
+    called_with: list[str] = []
+
+    def fake_crawl(client, brand_slug, make_id):
+        yield _fake_snippet("brand-new-1", 9000)
+
+    def fake_fetch_detail(client, url):
+        called_with.append(url)
+        return DetailResult(sold=True)
+
+    run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    listing = db_session.get(Listing, "brand-new-1")
+    assert listing is not None
+    assert listing.detail_scraped is False
+    assert listing.status == "active"
+    assert listing.url not in called_with

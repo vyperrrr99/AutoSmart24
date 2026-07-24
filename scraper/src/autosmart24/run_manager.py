@@ -32,10 +32,16 @@ def process_detail_backlog(
     run: ScrapeRun,
     batch_size: int = DETAIL_BATCH_SIZE,
     fetch_detail_fn=fetch_detail,
+    exclude_ids: set[str] = frozenset(),
 ) -> None:
     pending = session.execute(
         select(Listing)
-        .where(Listing.brand == brand.display_name, Listing.status == "active", Listing.detail_scraped.is_(False))
+        .where(
+            Listing.brand == brand.display_name,
+            Listing.status == "active",
+            Listing.detail_scraped.is_(False),
+            Listing.id.notin_(exclude_ids),
+        )
         .order_by(Listing.first_seen_at.asc())
         .limit(batch_size)
     ).scalars().all()
@@ -189,7 +195,7 @@ def run_brand_sweep(
                 url=row.url,
             )
 
-    process_detail_backlog(session, client, brand, run, fetch_detail_fn=fetch_detail_fn)
+    process_detail_backlog(session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=diff.new_ids)
 
     run.listings_seen = len(current_snippets)
     run.new_listings = len(diff.new_ids)
