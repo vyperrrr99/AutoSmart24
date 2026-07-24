@@ -1,0 +1,36 @@
+body {
+  font-family: system-ui, sans-serif;
+  background: #0f1115;
+  color: #e5e7eb;
+  margin: 0;
+  padding: 24px;
+}
+
+.brand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.brand-card {
+  background: #1a1d24;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.brand-card h3 {
+  cursor: pointer;
+  margin-top: 0;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.status-attivo { background: #14532d; }
+.status-in-pausa { background: #713f12; }
+.status-bloccato { background: #7f1d1d; }
+.status-in-esecuzione { background: #1e3a8a; }
