@@ -71,11 +71,18 @@ def _fake_snippet(listing_id: str, price: int) -> dict:
     }
 
 
-def _existing_listing(listing_id: str, price: int, detail_scraped: bool = True) -> Listing:
+def _existing_listing(
+    listing_id: str,
+    price: int,
+    detail_scraped: bool = True,
+    status: str = "active",
+    sold_at: dt.datetime | None = None,
+) -> Listing:
     now = dt.datetime.utcnow()
     return Listing(
         id=listing_id, brand="Fiat", price=price, url=f"https://www.autoscout24.it/annunci/{listing_id}",
-        first_seen_at=now, last_seen_at=now, last_checked_at=now, status="active", detail_scraped=detail_scraped,
+        first_seen_at=now, last_seen_at=now, last_checked_at=now, status=status, sold_at=sold_at,
+        detail_scraped=detail_scraped,
     )
 
 
@@ -126,6 +133,37 @@ def test_run_brand_sweep_detects_price_change(db_session):
     assert listing.price == 12000
     prices = [h.price for h in db_session.query(PriceHistory).filter_by(listing_id="existing-1").all()]
     assert 12000 in prices
+
+
+def test_run_brand_sweep_relists_a_previously_sold_listing_that_reappears(db_session):
+    """Live incident: a listing marked status='sold' by an earlier run's
+    sold-confirmation logic reappears, still active, in a later sweep's
+    crawl results. diff_sweep's active_db_prices is scoped to status='active'
+    rows only, so this listing is invisible to it and lands in diff.new_ids --
+    but its primary key already exists in the table, so treating it as a
+    fresh INSERT crashes with a UniqueViolation (reproducing the real
+    psycopg.errors.UniqueViolation seen in production). It must instead be
+    updated back to active in place, and must NOT be counted as a new
+    listing."""
+    sold_at = dt.datetime.utcnow() - dt.timedelta(days=3)
+    db_session.add(_existing_listing("relist-1", 10000, status="sold", sold_at=sold_at))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _fake_snippet("relist-1", 11000)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=_noop_fetch_detail)
+
+    assert run.status == "success"
+    assert run.new_listings == 0
+
+    listing = db_session.get(Listing, "relist-1")
+    assert listing.status == "active"
+    assert listing.sold_at is None
+    assert listing.price == 11000
+
+    prices = [h.price for h in db_session.query(PriceHistory).filter_by(listing_id="relist-1").all()]
+    assert 11000 in prices
 
 
 def test_run_brand_sweep_confirms_sold_when_detail_confirms(db_session):

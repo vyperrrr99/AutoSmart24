@@ -165,6 +165,7 @@ def run_brand_sweep(
 
     seen_ids: set[str] = set()
     new_ids: set[str] = set()
+    relisted_ids: set[str] = set()
     listings_seen = 0
     price_changes = 0
 
@@ -185,6 +186,14 @@ def run_brand_sweep(
         active_rows = session.execute(active_stmt).scalars().all()
         active_db_prices = {row.id: row.price for row in active_rows}
         active_rows_by_id = {row.id: row for row in active_rows}
+        # All listing IDs that exist for this brand regardless of status, so a
+        # listing that reappears while sitting at a non-"active" status (most
+        # commonly "sold") can be recognized as a relist rather than mistaken
+        # for a genuinely new listing -- active_db_prices above only covers
+        # status="active" rows, so diff_sweep alone cannot tell the difference.
+        existing_ids = set(
+            session.execute(select(Listing.id).where(Listing.brand == brand.display_name)).scalars().all()
+        )
 
         try:
             for batch in _iter_batches(
@@ -201,13 +210,48 @@ def run_brand_sweep(
                 now = _now()
 
                 for listing_id in diff.new_ids:
-                    if listing_id in new_ids:
+                    if listing_id in new_ids or listing_id in relisted_ids:
                         # Same listing seen again in a later batch of this same
                         # sweep (shouldn't normally happen given how crawl_fn
                         # partitions queries, but guard against a duplicate
                         # insert/PriceHistory row rather than crashing).
                         continue
                     snippet = batch_snippets[listing_id]
+                    if listing_id in existing_ids:
+                        # Reappeared under a status other than "active" (most commonly
+                        # "sold" -- either a genuine temporary delisting/relist, or a
+                        # prior false-positive sold confirmation). diff_sweep's
+                        # active_db_prices only covers status="active" rows, so this
+                        # listing was invisible to it and landed in new_ids -- but its
+                        # primary key already exists, so this must be an UPDATE, not
+                        # an INSERT. Not counted as a new listing.
+                        row = session.get(Listing, listing_id)
+                        if snippet["price"] is not None and snippet["price"] != row.price:
+                            row.price = snippet["price"]
+                            session.add(PriceHistory(listing_id=listing_id, price=snippet["price"], recorded_at=now))
+                        row.status = "active"
+                        row.sold_at = None
+                        row.cross_reference_id = snippet["cross_reference_id"]
+                        row.brand = snippet["brand"] or brand.display_name
+                        row.model = snippet["model"]
+                        row.model_group = snippet["model_group"]
+                        row.variant = snippet["variant"]
+                        row.motor_type_name = snippet["motor_type_name"]
+                        row.version_input = snippet["version_input"]
+                        row.transmission = snippet["transmission"]
+                        row.fuel = snippet["fuel"]
+                        row.first_registration = snippet["first_registration"]
+                        row.mileage_km = snippet["mileage_km"]
+                        row.seller_type = snippet["seller_type"]
+                        row.seller_company_name = snippet["seller_company_name"]
+                        row.city = snippet["city"]
+                        row.zip_code = snippet["zip_code"]
+                        row.url = snippet["url"]
+                        row.raw_snippet = snippet["raw_snippet"]
+                        row.last_seen_at = now
+                        row.last_checked_at = now
+                        relisted_ids.add(listing_id)
+                        continue
                     session.add(
                         Listing(
                             id=listing_id,
@@ -259,7 +303,10 @@ def run_brand_sweep(
                 # persisted in the DB (not an in-memory count that includes
                 # a batch whose commit never succeeded).
                 seen_ids.update(batch_snippets.keys())
-                new_ids.update(diff.new_ids)
+                # relisted_ids are ids from diff.new_ids that were treated as
+                # UPDATEs to a pre-existing row above, not fresh inserts --
+                # they must not inflate new_ids/run.new_listings.
+                new_ids.update(diff.new_ids - relisted_ids)
                 listings_seen += len(batch_snippets)
                 price_changes += len(diff.price_changed)
         except BlockedError as exc:
