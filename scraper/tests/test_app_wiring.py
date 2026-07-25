@@ -124,3 +124,128 @@ def test_seed_is_skipped_when_tracked_brands_already_populated(imported_app_modu
         assert {row.slug for row in rows} == {"custom"}  # MVP_BRANDS was NOT seeded on top
     finally:
         session.close()
+
+
+# --- _start_scheduler --------------------------------------------------
+#
+# The tests below drive the FastAPI startup hook directly. It seeds
+# tracked_brands (a no-op here since we pre-populate the table ourselves),
+# schedules one APScheduler job per row using that row's own
+# day_of_week/hour/minute, applies each row's paused flag, and finally calls
+# scheduler.start() -- which spawns a real background thread. Each test
+# MUST shut that scheduler down in a finally block, or the thread leaks into
+# later tests in the same process.
+
+
+def _seed_two_brands_with_distinct_schedules(session):
+    import datetime as dt
+
+    from autosmart24.db.models import BrandCatalog, TrackedBrand
+
+    now = dt.datetime.utcnow()
+    session.add(BrandCatalog(make_id=101, display_name="Alpha", slug="alpha", synced_at=now))
+    session.add(BrandCatalog(make_id=102, display_name="Beta", slug="beta", synced_at=now))
+    session.add(
+        TrackedBrand(
+            make_id=101, slug="alpha", display_name="Alpha", paused=False,
+            year_from_years=5, schedule_day_of_week=None, schedule_hour=3, schedule_minute=0,
+            created_at=now,
+        )
+    )
+    session.add(
+        TrackedBrand(
+            make_id=102, slug="beta", display_name="Beta", paused=False,
+            year_from_years=5, schedule_day_of_week="mon", schedule_hour=7, schedule_minute=30,
+            created_at=now,
+        )
+    )
+    session.commit()
+
+
+def _hour_of(job):
+    return job.trigger.fields[job.trigger.FIELD_NAMES.index("hour")].expressions[0].first
+
+
+def test_start_scheduler_schedules_one_job_per_tracked_row_with_its_own_schedule(imported_app_module):
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    init_db(module.engine)
+    session = module.session_factory()
+    try:
+        _seed_two_brands_with_distinct_schedules(session)
+    finally:
+        session.close()
+
+    try:
+        module._start_scheduler()
+
+        alpha_job = module.scheduler.scheduler.get_job("alpha")
+        beta_job = module.scheduler.scheduler.get_job("beta")
+        assert alpha_job is not None
+        assert beta_job is not None
+        assert _hour_of(alpha_job) == 3
+        assert _hour_of(beta_job) == 7
+    finally:
+        module.scheduler.shutdown()
+
+
+def test_start_scheduler_restores_paused_state_from_tracked_brands(imported_app_module):
+    import datetime as dt
+
+    from autosmart24.db.models import BrandCatalog, TrackedBrand
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    init_db(module.engine)
+    session = module.session_factory()
+    try:
+        now = dt.datetime.utcnow()
+        session.add(BrandCatalog(make_id=201, display_name="Paused Co", slug="paused-brand", synced_at=now))
+        session.add(BrandCatalog(make_id=202, display_name="Active Co", slug="active-brand", synced_at=now))
+        session.add(
+            TrackedBrand(
+                make_id=201, slug="paused-brand", display_name="Paused Co", paused=True,
+                year_from_years=5, schedule_day_of_week=None, schedule_hour=3, schedule_minute=0,
+                created_at=now,
+            )
+        )
+        session.add(
+            TrackedBrand(
+                make_id=202, slug="active-brand", display_name="Active Co", paused=False,
+                year_from_years=5, schedule_day_of_week=None, schedule_hour=4, schedule_minute=0,
+                created_at=now,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    try:
+        module._start_scheduler()
+
+        assert module.scheduler.is_paused("paused-brand") is True
+        assert module.scheduler.is_paused("active-brand") is False
+    finally:
+        module.scheduler.shutdown()
+
+
+def test_start_scheduler_does_not_create_duplicate_jobs(imported_app_module):
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    init_db(module.engine)
+    session = module.session_factory()
+    try:
+        _seed_two_brands_with_distinct_schedules(session)
+        from autosmart24.db.models import TrackedBrand
+        row_count = len(session.execute(select(TrackedBrand)).scalars().all())
+    finally:
+        session.close()
+
+    try:
+        module._start_scheduler()
+
+        assert len(module.scheduler.scheduler.get_jobs()) == row_count
+    finally:
+        module.scheduler.shutdown()
