@@ -45,3 +45,13 @@ export interface BrandDefaultsPatch {
   schedule_hour?: number;
   schedule_minute?: number;
 }
+
+// Payload contract for POST /brands/bulk: unlike BrandDefaultsPatch (used for
+// PATCH, where a subset of fields is genuinely allowed), the backend requires
+// schedule_hour and schedule_minute to be present for a bulk add.
+export interface BrandBulkAddPatch {
+  year_from_years: number | null;
+  schedule_day_of_week: string | null;
+  schedule_hour: number;
+  schedule_minute: number;
+}

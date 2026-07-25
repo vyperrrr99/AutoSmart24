@@ -1,11 +1,24 @@
-import type { BrandCatalogEntryOut, BrandDefaultsPatch, BrandStatusOut, EventOut, RunOut } from "./types";
+import type { BrandBulkAddPatch, BrandCatalogEntryOut, BrandDefaultsPatch, BrandStatusOut, EventOut, RunOut } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+// Thrown by the request helpers below instead of a bare Error so callers can
+// branch on the HTTP status code (e.g. to show a specific message for a 422)
+// without re-parsing the error text.
+export class ApiError extends Error {
+  status: number;
+
+  constructor(path: string, status: number) {
+    super(`Request to ${path} failed with status ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
   if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+    throw new ApiError(path, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -17,7 +30,7 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+    throw new ApiError(path, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -29,7 +42,7 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+    throw new ApiError(path, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -37,7 +50,7 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
 async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+    throw new ApiError(path, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -74,7 +87,7 @@ export function refreshBrandCatalog(): Promise<{ count: number }> {
   return postJson("/brand-catalog/refresh");
 }
 
-export function addBrands(makeIds: number[], defaults: BrandDefaultsPatch): Promise<BrandStatusOut[]> {
+export function addBrands(makeIds: number[], defaults: BrandBulkAddPatch): Promise<BrandStatusOut[]> {
   return postJson("/brands/bulk", { make_ids: makeIds, ...defaults });
 }
 

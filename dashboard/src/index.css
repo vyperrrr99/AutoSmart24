@@ -36,6 +36,36 @@ body {
 .status-in-esecuzione { background: #1e3a8a; }
 .status-errore { background: #991b1b; }
 
+.view-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.view-nav button {
+  background: #1a1d24;
+  color: #e5e7eb;
+  border: 1px solid #2a2e37;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 0.95em;
+  cursor: pointer;
+}
+
+.view-nav button:disabled {
+  background: #2a2e37;
+  cursor: default;
+  opacity: 0.7;
+}
+
+.manage-brands-error {
+  background: #7f1d1d;
+  color: #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-bottom: 16px;
+}
+
 .manage-brands section {
   background: #1a1d24;
   border-radius: 8px;
