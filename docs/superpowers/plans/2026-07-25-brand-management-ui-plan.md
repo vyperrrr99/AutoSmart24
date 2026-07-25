@@ -2359,7 +2359,7 @@ Expected: all pass.
 - [ ] **Step 2: Rebuild and restart the stack**
 
 Run (from `C:\App AI\Autoscout`): `docker compose up -d --build`
-Expected: images rebuild; migration `0004_brand_catalog_and_tracked_brands` applies on `app` startup (check `docker compose logs app --tail 20`); all three containers `Up`.
+Expected: images rebuild; the `0004` migration applies on `app` startup (check `docker compose logs app --tail 20`) — note the logged revision id is **`0004_brand_tables`**, not the longer filename: Postgres's `alembic_version.version_num` column is `VARCHAR(32)` and the full name would not fit, so Task 1 shortened the revision id while keeping the descriptive filename. Seeing `0004_brand_tables` in the log is correct, not a failure. All three containers `Up`.
 
 - [ ] **Step 3: Confirm the seed ran and the 5 original brands are intact**
 
