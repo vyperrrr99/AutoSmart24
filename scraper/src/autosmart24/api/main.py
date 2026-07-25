@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import os
 from typing import Callable
 
@@ -8,25 +9,57 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from autosmart24.api.schemas import BrandStatusOut, EventOut, RunOut
-from autosmart24.config import BrandConfig, MVP_BRANDS
-from autosmart24.db.models import ScrapeEvent, ScrapeRun
+from autosmart24.api.schemas import (
+    AddBrandsRequest,
+    ApplyDefaultsRequest,
+    BrandCatalogEntryOut,
+    BrandStatusOut,
+    EventOut,
+    RunOut,
+    UpdateBrandRequest,
+)
+from autosmart24.config import BrandConfig
+from autosmart24.db.models import BrandCatalog, ScrapeEvent, ScrapeRun, TrackedBrand
 from autosmart24.scheduler import BrandScheduler
+from autosmart24.scraping.brand_catalog import CatalogEntry
 
 DEFAULT_CORS_ALLOW_ORIGINS = "http://localhost:5173"
 
 
-def _find_brand(brand_slug: str) -> BrandConfig:
-    for brand in MVP_BRANDS:
-        if brand.slug == brand_slug:
-            return brand
-    raise HTTPException(status_code=404, detail=f"Unknown brand: {brand_slug}")
+def _to_brand_config(row: TrackedBrand) -> BrandConfig:
+    return BrandConfig(slug=row.slug, make_id=row.make_id, display_name=row.display_name)
+
+
+def _find_tracked_brand(session: Session, brand_slug: str) -> TrackedBrand:
+    row = session.execute(select(TrackedBrand).where(TrackedBrand.slug == brand_slug)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Brand not tracked: {brand_slug}")
+    return row
+
+
+def _to_brand_status(session: Session, row: TrackedBrand) -> BrandStatusOut:
+    last_run = session.execute(
+        select(ScrapeRun).where(ScrapeRun.brand == row.display_name).order_by(ScrapeRun.started_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    return BrandStatusOut(
+        make_id=row.make_id,
+        brand=row.display_name,
+        slug=row.slug,
+        paused=row.paused,
+        year_from_years=row.year_from_years,
+        schedule_day_of_week=row.schedule_day_of_week,
+        schedule_hour=row.schedule_hour,
+        schedule_minute=row.schedule_minute,
+        last_run=RunOut.model_validate(last_run) if last_run else None,
+    )
 
 
 def create_app(
     session_factory,
     scheduler: BrandScheduler,
     run_now_fn: Callable[[BrandConfig], None],
+    run_fn: Callable[[BrandConfig], None],
+    refresh_catalog_fn: Callable[[], list[CatalogEntry]],
 ) -> FastAPI:
     app = FastAPI(title="AutoSmart24 Scraper API")
 
@@ -38,7 +71,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -49,29 +82,120 @@ def create_app(
         finally:
             session.close()
 
+    def _reschedule(row: TrackedBrand) -> None:
+        scheduler.schedule_brand(
+            _to_brand_config(row),
+            run_fn=run_fn,
+            day_of_week=row.schedule_day_of_week,
+            hour=row.schedule_hour,
+            minute=row.schedule_minute,
+        )
+        if row.paused:
+            scheduler.pause_brand(row.slug)
+
+    @app.get("/brand-catalog", response_model=list[BrandCatalogEntryOut])
+    def get_brand_catalog(session: Session = Depends(get_session)):
+        rows = session.execute(select(BrandCatalog).order_by(BrandCatalog.display_name)).scalars().all()
+        return [BrandCatalogEntryOut.model_validate(row) for row in rows]
+
+    @app.post("/brand-catalog/refresh")
+    def refresh_brand_catalog(session: Session = Depends(get_session)):
+        entries = refresh_catalog_fn()
+        now = dt.datetime.utcnow()
+        for entry in entries:
+            existing = session.get(BrandCatalog, entry.make_id)
+            if existing is not None:
+                # slug is deliberately NOT overwritten here: it is the
+                # manual-correction safety net for a mis-derived slug (see
+                # the design spec's slug-validation risk note), applied
+                # directly against the database. Clobbering it on every
+                # refresh would silently undo that correction.
+                existing.display_name = entry.display_name
+                existing.synced_at = now
+            else:
+                session.add(
+                    BrandCatalog(make_id=entry.make_id, display_name=entry.display_name, slug=entry.slug, synced_at=now)
+                )
+        session.commit()
+        return {"count": len(entries)}
+
     @app.get("/brands", response_model=list[BrandStatusOut])
     def list_brands(session: Session = Depends(get_session)):
-        results = []
-        for brand in MVP_BRANDS:
-            last_run = session.execute(
-                select(ScrapeRun)
-                .where(ScrapeRun.brand == brand.display_name)
-                .order_by(ScrapeRun.started_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            results.append(
-                BrandStatusOut(
-                    brand=brand.display_name,
-                    slug=brand.slug,
-                    paused=scheduler.is_paused(brand.slug),
-                    last_run=RunOut.model_validate(last_run) if last_run else None,
+        rows = session.execute(select(TrackedBrand)).scalars().all()
+        return [_to_brand_status(session, row) for row in rows]
+
+    @app.post("/brands/bulk", response_model=list[BrandStatusOut])
+    def add_brands(body: AddBrandsRequest, session: Session = Depends(get_session)):
+        now = dt.datetime.utcnow()
+        touched: list[TrackedBrand] = []
+        for make_id in body.make_ids:
+            catalog_entry = session.get(BrandCatalog, make_id)
+            if catalog_entry is None:
+                raise HTTPException(status_code=400, detail=f"Unknown make_id in catalog: {make_id}")
+            row = session.get(TrackedBrand, make_id)
+            if row is None:
+                row = TrackedBrand(
+                    make_id=make_id,
+                    slug=catalog_entry.slug,
+                    display_name=catalog_entry.display_name,
+                    paused=False,
+                    year_from_years=body.year_from_years,
+                    schedule_day_of_week=body.schedule_day_of_week,
+                    schedule_hour=body.schedule_hour,
+                    schedule_minute=body.schedule_minute,
+                    created_at=now,
                 )
-            )
-        return results
+                session.add(row)
+                session.flush()
+            _reschedule(row)
+            touched.append(row)
+        session.commit()
+        return [_to_brand_status(session, row) for row in touched]
+
+    @app.patch("/brands/apply-defaults", response_model=list[BrandStatusOut])
+    def apply_defaults(body: ApplyDefaultsRequest, session: Session = Depends(get_session)):
+        fields = body.model_fields_set
+        rows = session.execute(select(TrackedBrand)).scalars().all()
+        for row in rows:
+            if "year_from_years" in fields:
+                row.year_from_years = body.year_from_years
+            if "schedule_day_of_week" in fields:
+                row.schedule_day_of_week = body.schedule_day_of_week
+            if "schedule_hour" in fields:
+                row.schedule_hour = body.schedule_hour
+            if "schedule_minute" in fields:
+                row.schedule_minute = body.schedule_minute
+            _reschedule(row)
+        session.commit()
+        return [_to_brand_status(session, row) for row in rows]
+
+    @app.patch("/brands/{brand_slug}", response_model=BrandStatusOut)
+    def update_brand(brand_slug: str, body: UpdateBrandRequest, session: Session = Depends(get_session)):
+        row = _find_tracked_brand(session, brand_slug)
+        fields = body.model_fields_set
+        if "year_from_years" in fields:
+            row.year_from_years = body.year_from_years
+        if "schedule_day_of_week" in fields:
+            row.schedule_day_of_week = body.schedule_day_of_week
+        if "schedule_hour" in fields:
+            row.schedule_hour = body.schedule_hour
+        if "schedule_minute" in fields:
+            row.schedule_minute = body.schedule_minute
+        _reschedule(row)
+        session.commit()
+        return _to_brand_status(session, row)
+
+    @app.delete("/brands/{brand_slug}")
+    def delete_brand(brand_slug: str, session: Session = Depends(get_session)):
+        row = _find_tracked_brand(session, brand_slug)
+        scheduler.remove_brand_job(row.slug)
+        session.delete(row)
+        session.commit()
+        return {"deleted": True}
 
     @app.get("/brands/{brand_slug}/runs", response_model=list[RunOut])
     def brand_runs(brand_slug: str, session: Session = Depends(get_session)):
-        brand = _find_brand(brand_slug)
+        brand = _find_tracked_brand(session, brand_slug)
         rows = session.execute(
             select(ScrapeRun).where(ScrapeRun.brand == brand.display_name).order_by(ScrapeRun.started_at.desc())
         ).scalars().all()
@@ -79,28 +203,32 @@ def create_app(
 
     @app.get("/brands/{brand_slug}/events", response_model=list[EventOut])
     def brand_events(brand_slug: str, session: Session = Depends(get_session)):
-        brand = _find_brand(brand_slug)
+        brand = _find_tracked_brand(session, brand_slug)
         rows = session.execute(
             select(ScrapeEvent).where(ScrapeEvent.brand == brand.display_name).order_by(ScrapeEvent.created_at.desc())
         ).scalars().all()
         return [EventOut.model_validate(row) for row in rows]
 
     @app.post("/brands/{brand_slug}/pause")
-    def pause_brand(brand_slug: str):
-        _find_brand(brand_slug)
+    def pause_brand(brand_slug: str, session: Session = Depends(get_session)):
+        row = _find_tracked_brand(session, brand_slug)
+        row.paused = True
+        session.commit()
         scheduler.pause_brand(brand_slug)
         return {"paused": True}
 
     @app.post("/brands/{brand_slug}/resume")
-    def resume_brand(brand_slug: str):
-        _find_brand(brand_slug)
+    def resume_brand(brand_slug: str, session: Session = Depends(get_session)):
+        row = _find_tracked_brand(session, brand_slug)
+        row.paused = False
+        session.commit()
         scheduler.resume_brand(brand_slug)
         return {"paused": False}
 
     @app.post("/brands/{brand_slug}/run-now")
-    def run_now(brand_slug: str):
-        brand = _find_brand(brand_slug)
-        run_now_fn(brand)
+    def run_now(brand_slug: str, session: Session = Depends(get_session)):
+        row = _find_tracked_brand(session, brand_slug)
+        run_now_fn(_to_brand_config(row))
         return {"triggered": True}
 
     return app
