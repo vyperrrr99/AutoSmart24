@@ -19,7 +19,12 @@ Invariants that are load-bearing — change these only deliberately:
   does this, but a future one must not rely on the signal.
 * ``close()`` blocks: the shutdown path joins the workers, each of which
   finishes its in-flight request first (rate-limit sleep plus HTTP
-  timeout). Stopping the pool can take tens of seconds.
+  timeout, repeated once per retry attempt — up to ``retries + 1``
+  times, tripling the worst case versus a single attempt). The worker's
+  ``stop.is_set()`` check happens only at the top of its while loop and
+  is never re-checked between retry attempts, so an abandoning consumer
+  or a dashboard-initiated pause waits out the entire retry chain, not
+  just one request. Stopping the pool can take tens of seconds.
 """
 
 from __future__ import annotations

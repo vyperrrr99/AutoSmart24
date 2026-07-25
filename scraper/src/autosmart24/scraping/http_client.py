@@ -50,21 +50,23 @@ class RateLimitedClient:
         )
 
     def get(self, url: str) -> httpx.Response:
-        attempts = self.retries + 1
+        attempts = max(0, self.retries) + 1
         for attempt in range(1, attempts + 1):
             multiplier = self.rate_controller.delay_multiplier() if self.rate_controller else 1.0
             delay = random.uniform(self.min_delay_seconds, self.max_delay_seconds) * multiplier
             self.sleep_fn(delay)
             try:
                 response = self.client.get(url)
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt >= attempts:
                     raise
                 logger.warning(
-                    "Transient network error fetching %s, retrying (attempt %d/%d)",
+                    "Transient network error fetching %s, retrying (attempt %d/%d): %s: %s",
                     url,
                     attempt + 1,
                     attempts,
+                    type(exc).__name__,
+                    exc,
                 )
                 continue
             if response.status_code in BLOCK_STATUS_CODES:

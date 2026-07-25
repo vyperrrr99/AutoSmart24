@@ -169,3 +169,42 @@ def test_get_respects_configured_retry_count_of_zero():
         client.get("https://example.test/no-retries")
 
     assert route.call_count == 1
+
+
+@respx.mock
+def test_get_sleeps_once_per_attempt_not_once_total():
+    """Pins the anti-hammering property: each retry attempt pays its own
+    rate-limit delay. A "hoist the delay above the loop" refactor would
+    make all retries fire back-to-back with zero spacing against a site
+    that just failed on us, and must be caught here."""
+    route = respx.get("https://example.test/flaky-delay")
+    route.side_effect = [
+        httpx.ReadTimeout("timed out"),
+        httpx.ReadTimeout("timed out"),
+        httpx.Response(200, text="ok"),
+    ]
+    delays: list[float] = []
+    client = RateLimitedClient(
+        min_delay_seconds=5, max_delay_seconds=5,
+        sleep_fn=lambda d: delays.append(d),
+    )
+
+    response = client.get("https://example.test/flaky-delay")
+
+    assert response.status_code == 200
+    assert delays == [5.0, 5.0, 5.0]
+
+
+@respx.mock
+def test_get_negative_retries_behaves_like_zero_retries():
+    route = respx.get("https://example.test/negative-retries")
+    route.side_effect = httpx.ReadTimeout("timed out")
+
+    client = RateLimitedClient(
+        min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None, retries=-1
+    )
+
+    with pytest.raises(httpx.ReadTimeout):
+        client.get("https://example.test/negative-retries")
+
+    assert route.call_count == 1
