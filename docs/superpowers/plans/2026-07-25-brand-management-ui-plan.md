@@ -455,14 +455,24 @@ def test_schedule_brand_with_day_of_week_restricts_to_that_day():
 
 
 def test_schedule_brand_replaces_existing_job_for_the_same_brand():
+    # Must run against a *started* scheduler: APScheduler queues add_job()
+    # into _pending_jobs until start() runs, and replace_existing dedup only
+    # happens on that deferred write-through. Production only ever
+    # re-schedules an existing brand from an API call, i.e. against a live
+    # scheduler -- this reproduces that path, where a non-started scheduler
+    # would silently pass while testing nothing.
     scheduler = BrandScheduler(BackgroundScheduler())
-    scheduler.schedule_brand(BRAND, run_fn=lambda brand: None, day_of_week=None, hour=3, minute=0)
-    scheduler.schedule_brand(BRAND, run_fn=lambda brand: None, day_of_week="mon", hour=4, minute=30)
+    scheduler.scheduler.start(paused=True)
+    try:
+        scheduler.schedule_brand(BRAND, run_fn=lambda brand: None, day_of_week=None, hour=3, minute=0)
+        scheduler.schedule_brand(BRAND, run_fn=lambda brand: None, day_of_week="mon", hour=4, minute=30)
 
-    jobs = [j for j in scheduler.scheduler.get_jobs() if j.id == "fiat"]
-    assert len(jobs) == 1
-    job = jobs[0]
-    assert job.trigger.fields[job.trigger.FIELD_NAMES.index("hour")].expressions[0].first == 4
+        jobs = [j for j in scheduler.scheduler.get_jobs() if j.id == "fiat"]
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.trigger.fields[job.trigger.FIELD_NAMES.index("hour")].expressions[0].first == 4
+    finally:
+        scheduler.shutdown()
 
 
 def test_remove_brand_job_removes_an_existing_job():

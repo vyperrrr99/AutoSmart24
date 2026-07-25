@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from autosmart24.config import BrandConfig
 
@@ -38,14 +38,25 @@ class BrandScheduler:
     def __init__(self, scheduler: BackgroundScheduler | None = None):
         self.scheduler = scheduler or BackgroundScheduler()
 
-    def schedule_brand(self, brand: BrandConfig, interval_days: float, run_fn) -> None:
+    def schedule_brand(
+        self,
+        brand: BrandConfig,
+        run_fn,
+        day_of_week: str | None = None,
+        hour: int = 3,
+        minute: int = 0,
+    ) -> None:
         self.scheduler.add_job(
             run_fn,
-            trigger=IntervalTrigger(days=interval_days),
+            trigger=CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute),
             id=brand.slug,
             replace_existing=True,
             args=[brand],
         )
+
+    def remove_brand_job(self, brand_slug: str) -> None:
+        if self.scheduler.get_job(brand_slug) is not None:
+            self.scheduler.remove_job(brand_slug)
 
     def pause_brand(self, brand_slug: str) -> None:
         self.scheduler.pause_job(brand_slug)
