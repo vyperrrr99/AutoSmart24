@@ -1,4 +1,5 @@
 import json
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -193,3 +194,87 @@ def test_crawl_brand_fetches_pages_of_multiple_models_in_parallel():
 
     # 2 models x (page 1 + page 2), one listing each
     assert len(results) == 4
+
+
+@respx.mock
+def test_crawl_brand_year_split_never_probes_below_the_year_floor():
+    """The bisection's lower bound must be the caller's floor, not MIN_YEAR.
+    Starting at 1950 would rescan decades the floor exists to exclude, and the
+    other split test cannot detect it because it mocks every year range
+    identically and asserts on a deduplicated id set."""
+    discovery_page_props = {
+        "numberOfResults": 1,
+        "numberOfPages": 1,
+        "listings": [],
+        "taxonomy": {"models": {"28": [{"value": 1746, "label": "Panda"}]}},
+    }
+    over_cap_props = {"numberOfResults": 999_999, "numberOfPages": 200, "listings": []}
+    leaf_props = {
+        "numberOfResults": 2,
+        "numberOfPages": 1,
+        "listings": [_fake_listing("leaf-1", 5000)],
+    }
+
+    respx.get(build_search_url("fiat", page=1, make_id=28)).mock(
+        return_value=httpx.Response(200, text=_next_data_html(discovery_page_props))
+    )
+    respx.get(build_search_url("fiat", page=1, make_id=28, model_id=1746, year_from=2015)).mock(
+        return_value=httpx.Response(200, text=_next_data_html(over_cap_props))
+    )
+    respx.route().mock(return_value=httpx.Response(200, text=_next_data_html(leaf_props)))
+
+    def client_factory():
+        return RateLimitedClient(min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None)
+
+    list(crawl_brand(client_factory, "fiat", 28, year_from=2015, concurrency=1))
+
+    seen_year_froms = set()
+    for call in respx.calls:
+        params = parse_qs(urlparse(str(call.request.url)).query)
+        if "fregfrom" in params:
+            seen_year_froms.add(int(params["fregfrom"][0]))
+
+    assert seen_year_froms, "expected at least one year-filtered request"
+    assert min(seen_year_froms) >= 2015, f"bisection probed below the floor: {sorted(seen_year_froms)}"
+
+
+@respx.mock
+def test_crawl_brand_keeps_the_year_floor_on_phase_two_page_urls():
+    """The floor must survive into the pages fetched after the probe. The other
+    floor test uses a single-page model, so phase 2 never runs there and a
+    dropped year_from in the page worker would go unnoticed."""
+    discovery_page_props = {
+        "numberOfResults": 1,
+        "numberOfPages": 1,
+        "listings": [],
+        "taxonomy": {"models": {"28": [{"value": 1746, "label": "Panda"}]}},
+    }
+    multi_page_props = {
+        "numberOfResults": 60,
+        "numberOfPages": 3,
+        "listings": [_fake_listing("p-1", 9000)],
+    }
+
+    respx.get(build_search_url("fiat", page=1, make_id=28)).mock(
+        return_value=httpx.Response(200, text=_next_data_html(discovery_page_props))
+    )
+    for page in (1, 2, 3):
+        respx.get(build_search_url("fiat", page=page, make_id=28, model_id=1746, year_from=2021)).mock(
+            return_value=httpx.Response(200, text=_next_data_html(multi_page_props))
+        )
+
+    def client_factory():
+        return RateLimitedClient(min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None)
+
+    list(crawl_brand(client_factory, "fiat", 28, year_from=2021, concurrency=2))
+
+    requested_pages = {}
+    for call in respx.calls:
+        params = parse_qs(urlparse(str(call.request.url)).query)
+        if "mmmv" not in params:
+            continue
+        page = int(params["page"][0])
+        requested_pages[page] = params.get("fregfrom", [None])[0]
+
+    assert set(requested_pages) == {1, 2, 3}, f"expected pages 1-3, got {sorted(requested_pages)}"
+    assert all(v == "2021" for v in requested_pages.values()), requested_pages
