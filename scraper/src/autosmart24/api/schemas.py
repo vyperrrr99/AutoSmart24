@@ -33,7 +33,42 @@ class EventOut(BaseModel):
 
 
 class BrandStatusOut(BaseModel):
+    make_id: int
     brand: str
     slug: str
     paused: bool
+    year_from_years: int | None
+    schedule_day_of_week: str | None
+    schedule_hour: int
+    schedule_minute: int
     last_run: RunOut | None
+
+
+class BrandCatalogEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    make_id: int
+    display_name: str
+    slug: str
+
+
+class AddBrandsRequest(BaseModel):
+    make_ids: list[int]
+    year_from_years: int | None = None
+    schedule_day_of_week: str | None = None
+    schedule_hour: int = 3
+    schedule_minute: int = 0
+
+
+class UpdateBrandRequest(BaseModel):
+    year_from_years: int | None = None
+    schedule_day_of_week: str | None = None
+    schedule_hour: int | None = None
+    schedule_minute: int | None = None
+
+
+class ApplyDefaultsRequest(BaseModel):
+    year_from_years: int | None = None
+    schedule_day_of_week: str | None = None
+    schedule_hour: int | None = None
+    schedule_minute: int | None = None
