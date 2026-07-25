@@ -52,3 +52,29 @@ def test_map_detail_listing_handles_missing_city_gracefully():
     assert mapped["city"] is None
     assert mapped["province"] is None
     assert mapped["created_at_source"] is None
+
+
+def test_map_detail_listing_keeps_full_province_name_when_no_short_sigla_segment():
+    """For provincial-capital listings the site sometimes omits a separate
+    short "sigla" segment, so the last "Comune - Provincia - Sigla" part is
+    a full province name (e.g. "Campobasso", 10 chars) rather than a 2-letter
+    abbreviation. This crashed a production sweep against the old
+    VARCHAR(8) province column (widened to VARCHAR(64) to fix it). The
+    mapper itself must keep taking parts[-1] verbatim, without truncating or
+    rejecting values longer than 8 chars -- that's now a legitimate value."""
+    ld = {
+        "id": "zzz2",
+        "identifier": {},
+        "vehicle": {},
+        "location": {"city": "Campobasso - Campobasso - Campobasso"},
+        "seller": {},
+        "prices": {},
+        "price": {},
+        "webPage": "https://www.autoscout24.it/annunci/zzz2",
+        "status": "Active",
+        "createdTimestampWithOffset": None,
+    }
+    mapped = map_detail_listing(ld)
+
+    assert mapped["province"] == "Campobasso"
+    assert len(mapped["province"]) > 8

@@ -391,6 +391,44 @@ def test_listing_accepts_cross_reference_id_longer_than_32_chars(db_session):
     assert fetched.cross_reference_id == long_id
 
 
+def test_listing_accepts_province_longer_than_8_chars(db_session):
+    """province was VARCHAR(8), sized assuming a 2-letter "sigla" (e.g.
+    "TO", "MI"). A real production sweep crashed with
+    StringDataRightTruncation when a provincial-capital listing's
+    "Comune - Provincia - Sigla" city string had no separate short sigla
+    segment, so parts[-1] was a full province name (e.g. "Campobasso", 10
+    chars) instead. The column was widened to VARCHAR(64). This guards
+    against the ORM model regressing back to a too-narrow column.
+
+    Note: SQLite (used for this test DB) does not enforce VARCHAR(n)
+    length, so this test cannot go RED against the old String(8) column --
+    same caveat as the cross_reference_id precedent above. The
+    authoritative proof is the migration applied and verified against the
+    real Postgres instance."""
+    now = dt.datetime.utcnow()
+    long_province = "x" * 20
+    assert len(long_province) > 8
+
+    db_session.add(
+        Listing(
+            id="province-long-1",
+            province=long_province,
+            brand="Fiat",
+            price=15000,
+            url="https://www.autoscout24.it/annunci/province-long-1",
+            first_seen_at=now,
+            last_seen_at=now,
+            last_checked_at=now,
+            status="active",
+            detail_scraped=False,
+        )
+    )
+    db_session.commit()
+
+    fetched = db_session.get(Listing, "province-long-1")
+    assert fetched.province == long_province
+
+
 def test_run_brand_sweep_marks_error_and_preserves_partial_state_on_unexpected_exception(db_session):
     """An unexpected (non-BlockedError) exception raised mid-sweep -- after
     at least one batch has already been committed -- must not leave the

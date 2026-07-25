@@ -45,7 +45,7 @@ class Listing(Base):
     seller_company_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     city: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    province: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    province: Mapped[str | None] = mapped_column(String(64), nullable=True)
     zip_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
