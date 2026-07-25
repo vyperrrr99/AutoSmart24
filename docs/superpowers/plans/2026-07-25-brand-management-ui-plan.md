@@ -15,7 +15,7 @@
 - The dashboard is the sole monitoring/notification channel — no email/Telegram (unchanged).
 - Single machine, single IP, no IP rotation (unchanged) — this plan does not add concurrency beyond the existing `SCRAPE_CONCURRENCY`/`SCRAPE_SESSION_REFRESH_REQUESTS`/`SCRAPE_MIN_DELAY_SECONDS`/`SCRAPE_MAX_DELAY_SECONDS` knobs; tracking many brands simultaneously is still bound by the same one-IP posture.
 - Scheduling is deliberately simple (optional day-of-week + hour + minute, translating directly to one `CronTrigger`), not full cron syntax — a dropdown and a time picker are buildable in a UI; a cron expression field is not friendly to build or use here.
-- The slug used to build search URLs for a catalog brand is derived automatically from its display name (lowercase, non-alphanumeric runs collapsed to a single hyphen, trimmed) and **must be validated against a representative sample of real catalog data, not assumed correct for all ~290 entries** — Task 2 includes this validation as an explicit step, not an afterthought. If Task 2 Step 5 finds a brand whose derived slug is wrong, the correction mechanism is a direct database `UPDATE` on `brand_catalog.slug` (and on `tracked_brands.slug` too, plus a re-schedule, if that brand is already tracked) — not a UI control. `POST /brand-catalog/refresh` (Task 5) deliberately never overwrites an existing row's `slug` on re-sync, precisely so a manual correction survives future refreshes.
+- The slug used to build search URLs for a catalog brand is derived automatically from its display name (Unicode NFKD normalization with combining marks stripped so accented letters transliterate to ASCII, then lowercase, non-alphanumeric runs collapsed to a single hyphen, trimmed) and **must be validated against a representative sample of real catalog data, not assumed correct for all ~290 entries** — Task 2 includes this validation as an explicit step, not an afterthought. If Task 2 Step 5 finds a brand whose derived slug is wrong, the correction mechanism is a direct database `UPDATE` on `brand_catalog.slug` (and on `tracked_brands.slug` too, plus a re-schedule, if that brand is already tracked) — not a UI control. `POST /brand-catalog/refresh` (Task 5) deliberately never overwrites an existing row's `slug` on re-sync, precisely so a manual correction survives future refreshes.
 - On first startup after this plan ships, if `tracked_brands` is empty, it is seeded from the existing `MVP_BRANDS` (same 5 brands, same `make_id`/slug) so today's behavior is not silently lost. The seeded schedule (daily at 03:00) is not identical to today's `SCRAPE_INTERVAL_DAYS=4` — this is a deliberate, disclosed behavior change (see Task 6) since interval-days and day/hour scheduling are different paradigms; the user can adjust it immediately from the new UI.
 - Base URL: `https://www.autoscout24.it`.
 
@@ -291,6 +291,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'autosmart24.scraping.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from autosmart24.scraping.crawler import fetch_page_data
@@ -314,8 +315,17 @@ class CatalogEntry:
     slug: str
 
 
+def _strip_diacritics(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def derive_slug(display_name: str) -> str:
-    slug = _SLUG_SEPARATOR_RE.sub("-", display_name.strip().lower())
+    # Without transliteration, accented brand names like "Bolloré" would have
+    # their diacritic silently dropped (-> "bollor"), producing a truncated
+    # slug that 404s and looks indistinguishable from a brand with no listings.
+    normalized = _strip_diacritics(display_name)
+    slug = _SLUG_SEPARATOR_RE.sub("-", normalized.strip().lower())
     return slug.strip("-")
 
 

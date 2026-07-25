@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from autosmart24.scraping.crawler import fetch_page_data
@@ -24,8 +25,17 @@ class CatalogEntry:
     slug: str
 
 
+def _strip_diacritics(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def derive_slug(display_name: str) -> str:
-    slug = _SLUG_SEPARATOR_RE.sub("-", display_name.strip().lower())
+    # Without transliteration, accented brand names like "Bolloré" would have
+    # their diacritic silently dropped (-> "bollor"), producing a truncated
+    # slug that 404s and looks indistinguishable from a brand with no listings.
+    normalized = _strip_diacritics(display_name)
+    slug = _SLUG_SEPARATOR_RE.sub("-", normalized.strip().lower())
     return slug.strip("-")
 
 

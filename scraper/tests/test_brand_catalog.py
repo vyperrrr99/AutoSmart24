@@ -28,6 +28,14 @@ def test_derive_slug_strips_leading_trailing_punctuation():
     assert derive_slug(" DS Automobiles ") == "ds-automobiles"
 
 
+def test_derive_slug_transliterates_accented_characters():
+    assert derive_slug("Bolloré") == "bollore"
+
+
+def test_derive_slug_transliterates_umlauts_without_creating_separators():
+    assert derive_slug("Trailer-Anhänger") == "trailer-anhanger"
+
+
 def _next_data_html(page_props: dict) -> str:
     payload = {"props": {"pageProps": page_props}}
     return f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(payload)}</script></body></html>'
