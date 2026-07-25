@@ -500,8 +500,18 @@ def test_run_worker_pool_stops_workers_when_consumer_abandons_the_generator():
     gen.close()
 
     with lock:
-        completed = len(finished_jobs)
-    assert completed < 50
+        completed_at_close = len(finished_jobs)
+
+    # 50 jobs across 2 workers at 20ms each need ~0.5s to drain. Wait longer
+    # than that: if the workers really stopped, the count cannot move.
+    # Asserting only on the count at close() time would be vacuous — barely any
+    # jobs finish in that instant whether or not the workers were stopped.
+    time.sleep(0.8)
+    with lock:
+        completed_later = len(finished_jobs)
+
+    assert completed_later == completed_at_close
+    assert completed_later < 50
 
 
 def test_run_worker_pool_runs_jobs_concurrently():
@@ -562,6 +572,7 @@ def run_worker_pool(
         return
 
     concurrency = max(1, concurrency)
+    session_refresh_requests = max(1, session_refresh_requests)
 
     job_queue: "queue.Queue[JobT]" = queue.Queue()
     for job in jobs:
@@ -581,9 +592,10 @@ def run_worker_pool(
                 return
 
     def worker() -> None:
-        client = client_factory()
-        processed = 0
+        client: RateLimitedClient | None = None
         try:
+            client = client_factory()
+            processed = 0
             while not stop.is_set():
                 try:
                     job = job_queue.get_nowait()
@@ -593,20 +605,21 @@ def run_worker_pool(
                     client.close()
                     client = client_factory()
                     processed = 0
-                try:
-                    job_results = worker_fn(job, client)
-                except BaseException as exc:
-                    # Captured and re-raised to the caller below. Letting it kill
-                    # the thread would silently truncate the job list.
-                    with error_lock:
-                        error_holder.append(exc)
-                    _drain_queue()
-                    return
+                job_results = worker_fn(job, client)
                 processed += 1
                 for item in job_results:
                     results.put(item)
+        except BaseException as exc:
+            # Captured and re-raised to the caller. Letting it kill the thread
+            # would silently truncate the job list while the caller sees a
+            # normal completion. This must cover client_factory() too, not just
+            # worker_fn: a factory failure is just as silent.
+            with error_lock:
+                error_holder.append(exc)
+            _drain_queue()
         finally:
-            client.close()
+            if client is not None:
+                client.close()
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(concurrency)]
     for t in threads:
