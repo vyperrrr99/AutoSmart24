@@ -4,9 +4,14 @@ import { BrandCard } from "./BrandCard";
 import type { BrandStatusOut } from "../types";
 
 const brand: BrandStatusOut = {
+  make_id: 28,
   brand: "Fiat",
   slug: "fiat",
   paused: false,
+  year_from_years: null,
+  schedule_day_of_week: null,
+  schedule_hour: 3,
+  schedule_minute: 0,
   last_run: {
     id: 1, brand: "Fiat", started_at: "2026-07-24T10:00:00Z", finished_at: "2026-07-24T10:05:00Z",
     status: "success", listings_seen: 100, new_listings: 5, price_changes: 3, sold_detected: 2, errors_count: 0,

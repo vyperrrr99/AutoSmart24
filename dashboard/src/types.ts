@@ -22,8 +22,26 @@ export interface EventOut {
 }
 
 export interface BrandStatusOut {
+  make_id: number;
   brand: string;
   slug: string;
   paused: boolean;
+  year_from_years: number | null;
+  schedule_day_of_week: string | null;
+  schedule_hour: number;
+  schedule_minute: number;
   last_run: RunOut | null;
+}
+
+export interface BrandCatalogEntryOut {
+  make_id: number;
+  display_name: string;
+  slug: string;
+}
+
+export interface BrandDefaultsPatch {
+  year_from_years?: number | null;
+  schedule_day_of_week?: string | null;
+  schedule_hour?: number;
+  schedule_minute?: number;
 }
