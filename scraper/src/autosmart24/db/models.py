@@ -106,3 +106,26 @@ class ScrapeEvent(Base):
     message: Mapped[str] = mapped_column(String(2048), nullable=False)
     url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
+class BrandCatalog(Base):
+    __tablename__ = "brand_catalog"
+
+    make_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
+class TrackedBrand(Base):
+    __tablename__ = "tracked_brands"
+
+    make_id: Mapped[int] = mapped_column(Integer, ForeignKey("brand_catalog.make_id"), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    year_from_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    schedule_day_of_week: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    schedule_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    schedule_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
