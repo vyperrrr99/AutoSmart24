@@ -4,7 +4,7 @@ import datetime as dt
 import itertools
 from typing import Callable, Iterable, Iterator
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from autosmart24.config import BrandConfig
@@ -15,7 +15,7 @@ from autosmart24.scraping.crawler import crawl_brand
 from autosmart24.scraping.detail_queue import fetch_detail
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 
-DETAIL_BATCH_SIZE = 50
+DETAIL_DB_PAGE_SIZE = 50
 NEW_LISTING_COMMIT_BATCH_SIZE = 100
 
 
@@ -36,80 +36,107 @@ def process_detail_backlog(
     run: ScrapeRun,
     concurrency: int = 1,
     session_refresh_requests: int = 30,
-    batch_size: int = DETAIL_BATCH_SIZE,
+    db_page_size: int = DETAIL_DB_PAGE_SIZE,
     fetch_detail_fn=fetch_detail,
     exclude_ids: set[str] = frozenset(),
+    year_from: int | None = None,
 ) -> int:
-    pending = session.execute(
-        select(Listing)
-        .where(
+    total_sold = 0
+    # Rows the pool did not report on are parked here for the rest of this call,
+    # so the LIMIT-ed query can never re-select the same unprocessable row
+    # forever. Without this, one permanently-failing detail page becomes an
+    # infinite loop hammering the site.
+    failed_ids: set[str] = set()
+
+    while True:
+        stmt = select(Listing).where(
             Listing.brand == brand.display_name,
             Listing.status == "active",
             Listing.detail_scraped.is_(False),
-            Listing.id.notin_(exclude_ids),
+            Listing.id.notin_(set(exclude_ids) | failed_ids),
         )
-        .order_by(Listing.first_seen_at.asc())
-        .limit(batch_size)
-    ).scalars().all()
+        if year_from is not None:
+            stmt = stmt.where(
+                or_(
+                    Listing.first_registration.is_(None),
+                    Listing.first_registration >= dt.date(year_from, 1, 1),
+                )
+            )
+        pending = session.execute(
+            stmt.order_by(Listing.first_seen_at.asc()).limit(db_page_size)
+        ).scalars().all()
 
-    if not pending:
-        return 0
+        if not pending:
+            return total_sold
 
-    rows_by_id = {row.id: row for row in pending}
-    jobs = [(row.id, row.url) for row in pending]
-    enriched = 0
-    sold = 0
-    now = _now()
+        rows_by_id = {row.id: row for row in pending}
+        jobs = [(row.id, row.url) for row in pending]
+        enriched = 0
+        sold = 0
+        handled: set[str] = set()
+        now = _now()
 
-    def _detail_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
-        listing_id, url = job
-        return [(listing_id, fetch_detail_fn(client, url))]
+        def _detail_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
+            listing_id, url = job
+            return [(listing_id, fetch_detail_fn(client, url))]
 
-    try:
-        for listing_id, result in run_worker_pool(
-            jobs, _detail_worker, client_factory, concurrency, session_refresh_requests
-        ):
-            row = rows_by_id[listing_id]
-            row.last_checked_at = now
-            if result.sold:
-                row.status = "sold"
-                row.sold_at = now
-                sold += 1
-                continue
+        try:
+            for listing_id, result in run_worker_pool(
+                jobs, _detail_worker, client_factory, concurrency, session_refresh_requests
+            ):
+                handled.add(listing_id)
+                row = rows_by_id[listing_id]
+                row.last_checked_at = now
+                if result.sold:
+                    row.status = "sold"
+                    row.sold_at = now
+                    sold += 1
+                    continue
 
-            detail = result.data
-            if detail["price"] is not None and detail["price"] != row.price:
-                row.price = detail["price"]
-                session.add(PriceHistory(listing_id=row.id, price=detail["price"], recorded_at=now))
+                detail = result.data
+                if detail["price"] is not None and detail["price"] != row.price:
+                    row.price = detail["price"]
+                    session.add(PriceHistory(listing_id=row.id, price=detail["price"], recorded_at=now))
 
-            row.power_kw = detail["power_kw"]
-            row.power_cv = detail["power_cv"]
-            row.displacement_ccm = detail["displacement_ccm"]
-            row.body_type = detail["body_type"]
-            row.body_color = detail["body_color"]
-            row.num_seats = detail["num_seats"]
-            row.num_doors = detail["num_doors"]
-            row.num_previous_owners = detail["num_previous_owners"]
-            row.province = detail["province"]
-            row.latitude = detail["latitude"]
-            row.longitude = detail["longitude"]
-            row.vat_exposed = detail["vat_exposed"]
-            row.price_evaluation_category = detail["price_evaluation_category"]
-            row.price_evaluation_median = detail["price_evaluation_median"]
-            row.created_at_source = detail["created_at_source"]
-            row.raw_detail = detail["raw_detail"]
-            row.detail_scraped = True
-            enriched += 1
-    except BlockedError as exc:
-        run.status = "blocked"
-        run.errors_count += 1
-        _log_event(session, run, "blocked", str(exc), url=exc.url)
+                row.power_kw = detail["power_kw"]
+                row.power_cv = detail["power_cv"]
+                row.displacement_ccm = detail["displacement_ccm"]
+                row.body_type = detail["body_type"]
+                row.body_color = detail["body_color"]
+                row.num_seats = detail["num_seats"]
+                row.num_doors = detail["num_doors"]
+                row.num_previous_owners = detail["num_previous_owners"]
+                row.province = detail["province"]
+                row.latitude = detail["latitude"]
+                row.longitude = detail["longitude"]
+                row.vat_exposed = detail["vat_exposed"]
+                row.price_evaluation_category = detail["price_evaluation_category"]
+                row.price_evaluation_median = detail["price_evaluation_median"]
+                row.created_at_source = detail["created_at_source"]
+                row.raw_detail = detail["raw_detail"]
+                row.detail_scraped = True
+                enriched += 1
+        except BlockedError as exc:
+            run.status = "blocked"
+            run.errors_count += 1
+            _log_event(session, run, "blocked", str(exc), url=exc.url)
+            # Fall through to the info event below before returning: on a block
+            # it is exactly the "how far did we get" line an operator needs, and
+            # the dashboard is this project's only monitoring channel.
+            _log_event(
+                session, run, "info",
+                f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
+            )
+            session.commit()
+            return total_sold + sold
 
-    _log_event(
-        session, run, "info",
-        f"Detail backlog batch: enriched {enriched}, confirmed sold {sold} (batch size {len(pending)})",
-    )
-    return sold
+        _log_event(
+            session, run, "info",
+            f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
+        )
+        session.commit()
+        total_sold += sold
+        failed_ids |= set(rows_by_id) - handled
 
 
 def _iter_batches(iterable: Iterable[dict], batch_size: int) -> Iterator[list[dict]]:
@@ -142,9 +169,20 @@ def run_brand_sweep(
     price_changes = 0
 
     try:
-        active_rows = session.execute(
-            select(Listing).where(Listing.brand == brand.display_name, Listing.status == "active")
-        ).scalars().all()
+        active_stmt = select(Listing).where(
+            Listing.brand == brand.display_name, Listing.status == "active"
+        )
+        if year_from is not None:
+            # Listings registered before the floor no longer appear in our
+            # searches, so they must not be mistaken for "missing" (which would
+            # trigger a pointless sold-confirmation fetch on every run, forever).
+            active_stmt = active_stmt.where(
+                or_(
+                    Listing.first_registration.is_(None),
+                    Listing.first_registration >= dt.date(year_from, 1, 1),
+                )
+            )
+        active_rows = session.execute(active_stmt).scalars().all()
         active_db_prices = {row.id: row.price for row in active_rows}
         active_rows_by_id = {row.id: row for row in active_rows}
 
@@ -265,11 +303,13 @@ def run_brand_sweep(
             run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
 
-        backlog_sold_count = process_detail_backlog(
-            session, client_factory, brand, run,
-            concurrency=concurrency, session_refresh_requests=session_refresh_requests,
-            fetch_detail_fn=fetch_detail_fn, exclude_ids=new_ids,
-        )
+        backlog_sold_count = 0
+        if run.status != "blocked":
+            backlog_sold_count = process_detail_backlog(
+                session, client_factory, brand, run,
+                concurrency=concurrency, session_refresh_requests=session_refresh_requests,
+                fetch_detail_fn=fetch_detail_fn, year_from=year_from,
+            )
 
         run.listings_seen = listings_seen
         run.new_listings = len(new_ids)

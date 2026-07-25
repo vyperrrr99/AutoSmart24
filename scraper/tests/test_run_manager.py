@@ -100,7 +100,7 @@ def test_run_brand_sweep_records_new_listing(db_session):
     def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("new-1", 15000)
 
-    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=_noop_fetch_detail)
 
     assert run.status == "success"
     assert run.new_listings == 1
@@ -204,23 +204,23 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
     assert listing.price == 10500
 
 
-def test_run_brand_sweep_excludes_same_run_new_listings_from_backlog(db_session):
-    called_with: list[str] = []
+def test_run_brand_sweep_fetches_detail_for_listings_new_in_this_same_sweep(db_session):
+    """Binding requirement: a listing not already in the DB must have its detail
+    page fetched during the very sweep that discovers it, not the next one."""
+    fetched_urls: list[str] = []
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("brand-new-1", 9000)
 
     def fake_fetch_detail(client, url):
-        called_with.append(url)
-        return DetailResult(sold=True)
+        fetched_urls.append(url)
+        return DetailResult(sold=False, data=_fake_detail_data("brand-new-1"))
 
     run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     listing = db_session.get(Listing, "brand-new-1")
-    assert listing is not None
-    assert listing.detail_scraped is False
-    assert listing.status == "active"
-    assert listing.url not in called_with
+    assert listing.detail_scraped is True
+    assert listing.url in fetched_urls
 
 
 def test_run_brand_sweep_marks_blocked_and_stops_on_block_during_missing_ids_loop(db_session):
@@ -258,7 +258,7 @@ def test_run_brand_sweep_marks_blocked_on_block_during_detail_backlog(db_session
     assert run.status == "blocked"
     events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
     assert any(e.level == "blocked" for e in events)
-    assert any(e.level == "info" and e.message.startswith("Detail backlog batch:") for e in events)
+    assert any(e.level == "info" and e.message.startswith("Detail backlog page:") for e in events)
 
 
 def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
@@ -328,7 +328,7 @@ def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
             other.close()
         yield _fake_snippet("early-visible-1", 5000)
 
-    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=_noop_fetch_detail)
 
     assert run.status == "success"
 
@@ -353,7 +353,7 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
         yield _fake_snippet("batch-4", 4000)
         yield _fake_snippet("batch-5", 5000)
 
-    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, batch_size=2)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, batch_size=2, fetch_detail_fn=_noop_fetch_detail)
 
     assert run.status == "success"
     assert run.new_listings == 5
@@ -492,3 +492,67 @@ def test_run_brand_sweep_works_end_to_end_with_the_real_crawl_brand(db_session):
     listing = db_session.get(Listing, "e2e-1")
     assert listing is not None
     assert listing.price == 12345
+
+
+def test_process_detail_backlog_processes_every_pending_listing_across_db_pages(db_session):
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    for i in range(7):
+        db_session.add(_existing_listing(f"pending-{i}", 1000 + i, detail_scraped=False))
+    db_session.commit()
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run,
+        concurrency=3, db_page_size=3, fetch_detail_fn=fake_fetch_detail,
+    )
+
+    rows = db_session.query(Listing).filter_by(brand="Fiat").all()
+    assert len(rows) == 7
+    assert all(row.detail_scraped for row in rows)
+
+
+def test_process_detail_backlog_terminates_when_a_listing_cannot_be_processed(db_session):
+    """A permanently failing detail page must not trap the paging loop in an
+    infinite retry that hammers the site."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(_existing_listing("poison-1", 1000, detail_scraped=False))
+    db_session.commit()
+
+    def failing_fetch_detail(client, url):
+        raise ValueError("permanently broken detail page")
+
+    with pytest.raises(ValueError):
+        process_detail_backlog(
+            db_session, _client, BRAND, run, db_page_size=1, fetch_detail_fn=failing_fetch_detail
+        )
+
+
+def test_run_brand_sweep_ignores_active_listings_older_than_the_year_floor(db_session):
+    """Listings registered before the floor no longer appear in searches, so they
+    must not be mistaken for 'missing' and sold-confirmed on every run."""
+    old = _existing_listing("old-1", 3000)
+    old.first_registration = dt.date(2005, 6, 1)
+    db_session.add(old)
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter([])
+
+    def exploding_fetch_detail(client, url):
+        raise AssertionError(f"out-of-floor listing must not be detail-fetched: {url}")
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        fetch_detail_fn=exploding_fetch_detail, year_from=2021,
+    )
+
+    assert run.status == "success"
+    assert run.sold_detected == 0
+    assert run.errors_count == 0
+    assert db_session.get(Listing, "old-1").status == "active"
