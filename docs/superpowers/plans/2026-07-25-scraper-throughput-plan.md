@@ -377,8 +377,8 @@ The core reusable primitive: given a list of jobs and a per-job worker function,
 `scraper/tests/test_concurrency.py`:
 
 ```python
-import gc
 import threading
+import time
 
 import pytest
 
@@ -483,24 +483,21 @@ def test_run_worker_pool_creates_fresh_client_after_session_refresh_threshold():
 def test_run_worker_pool_stops_workers_when_consumer_abandons_the_generator():
     """Abandoning the generator must not leave threads hammering the site with
     nobody consuming the results."""
-    started = threading.Event()
-    release = threading.Event()
-    finished_jobs = []
+    finished_jobs: list[int] = []
     lock = threading.Lock()
 
     def worker_fn(job, client):
-        started.set()
-        release.wait(timeout=5)
+        # A real per-job cost is what makes this test meaningful: without it the
+        # workers drain all 50 jobs before the consumer can abandon the
+        # generator, and the assertion below would pass vacuously.
+        time.sleep(0.02)
         with lock:
             finished_jobs.append(job)
         return [job]
 
     gen = run_worker_pool(list(range(50)), worker_fn, _client_factory, concurrency=2, session_refresh_requests=100)
-    threading.Thread(target=lambda: started.wait(timeout=5), daemon=True).start()
-    release.set()
     next(gen)
     gen.close()
-    gc.collect()
 
     with lock:
         completed = len(finished_jobs)
