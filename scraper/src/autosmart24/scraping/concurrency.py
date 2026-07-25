@@ -1,3 +1,27 @@
+"""Thread pool for rate-limited HTTP jobs.
+
+Invariants that are load-bearing — change these only deliberately:
+
+* The results queue is UNBOUNDED. This is what makes abandonment
+  deadlock-free: a worker can never block in ``results.put`` while the
+  consumer has stopped reading. Adding a ``maxsize`` would reintroduce a
+  deadlock on the generator-abandonment path.
+* The watcher joins every worker BEFORE posting the done marker, and a
+  worker always finishes its ``results.put`` calls before terminating, so
+  the marker is provably behind every result. No result can be lost.
+* Results arrive in completion order, not submission order. Callers must
+  not depend on ordering.
+* Captured worker errors are re-raised only when the generator runs to
+  completion. If the consumer abandons the generator (``close()``, or an
+  exception in the consumer's own loop body), ``GeneratorExit`` propagates
+  and any captured error is discarded. A consumer that ``break``s out of
+  the loop will therefore not see a ``BlockedError`` — no current caller
+  does this, but a future one must not rely on the signal.
+* ``close()`` blocks: the shutdown path joins the workers, each of which
+  finishes its in-flight request first (rate-limit sleep plus HTTP
+  timeout). Stopping the pool can take tens of seconds.
+"""
+
 from __future__ import annotations
 
 import queue
@@ -21,6 +45,7 @@ def run_worker_pool(
         return
 
     concurrency = max(1, concurrency)
+    session_refresh_requests = max(1, session_refresh_requests)
 
     job_queue: "queue.Queue[JobT]" = queue.Queue()
     for job in jobs:
@@ -40,9 +65,10 @@ def run_worker_pool(
                 return
 
     def worker() -> None:
-        client = client_factory()
-        processed = 0
+        client: RateLimitedClient | None = None
         try:
+            client = client_factory()
+            processed = 0
             while not stop.is_set():
                 try:
                     job = job_queue.get_nowait()
@@ -52,20 +78,21 @@ def run_worker_pool(
                     client.close()
                     client = client_factory()
                     processed = 0
-                try:
-                    job_results = worker_fn(job, client)
-                except BaseException as exc:
-                    # Captured and re-raised to the caller below. Letting it kill
-                    # the thread would silently truncate the job list.
-                    with error_lock:
-                        error_holder.append(exc)
-                    _drain_queue()
-                    return
+                job_results = worker_fn(job, client)
                 processed += 1
                 for item in job_results:
                     results.put(item)
+        except BaseException as exc:
+            # Captured and re-raised to the caller. Letting it kill the thread
+            # would silently truncate the job list while the caller sees a
+            # normal completion. This must cover client_factory() too, not just
+            # worker_fn: a factory failure is just as silent.
+            with error_lock:
+                error_holder.append(exc)
+            _drain_queue()
         finally:
-            client.close()
+            if client is not None:
+                client.close()
 
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(concurrency)]
     for t in threads:

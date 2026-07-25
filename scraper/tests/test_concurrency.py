@@ -102,15 +102,17 @@ def test_run_worker_pool_creates_fresh_client_after_session_refresh_threshold():
 
 
 def test_run_worker_pool_stops_workers_when_consumer_abandons_the_generator():
-    """Abandoning the generator must not leave threads hammering the site with
-    nobody consuming the results."""
+    """Abandoning the generator must stop the workers, not leave them fetching
+    with nobody consuming the results.
+
+    Asserting only on the count at close() time would be vacuous: barely any
+    jobs finish in that instant whether or not the workers were stopped. The
+    discriminating check is that the count does not move afterwards.
+    """
     finished_jobs: list[int] = []
     lock = threading.Lock()
 
     def worker_fn(job, client):
-        # A real per-job cost is what makes this test meaningful: without it the
-        # workers drain all 50 jobs before the consumer can abandon the
-        # generator, and the assertion below would pass vacuously.
         time.sleep(0.02)
         with lock:
             finished_jobs.append(job)
@@ -121,8 +123,16 @@ def test_run_worker_pool_stops_workers_when_consumer_abandons_the_generator():
     gen.close()
 
     with lock:
-        completed = len(finished_jobs)
-    assert completed < 50
+        completed_at_close = len(finished_jobs)
+
+    # 50 jobs across 2 workers at 20ms each need ~0.5s to drain. Wait longer
+    # than that: if the workers really stopped, the count cannot move.
+    time.sleep(0.8)
+    with lock:
+        completed_later = len(finished_jobs)
+
+    assert completed_later == completed_at_close
+    assert completed_later < 50
 
 
 def test_run_worker_pool_runs_jobs_concurrently():
@@ -146,3 +156,32 @@ def test_run_worker_pool_treats_non_positive_concurrency_as_one():
         run_worker_pool(list(range(3)), worker_fn, _client_factory, concurrency=0, session_refresh_requests=100)
     )
     assert results == [0, 1, 2]
+
+
+def test_run_worker_pool_reraises_client_factory_failure_on_first_client():
+    """A factory failure must not silently produce an empty, successful result."""
+    def failing_factory():
+        raise RuntimeError("cannot build client")
+
+    def worker_fn(job, client):
+        return [job]
+
+    with pytest.raises(RuntimeError, match="cannot build client"):
+        list(run_worker_pool(list(range(5)), worker_fn, failing_factory, concurrency=1, session_refresh_requests=100))
+
+
+def test_run_worker_pool_reraises_client_factory_failure_on_session_refresh():
+    """The refresh-path factory call is just as silent a failure point as the first."""
+    calls = {"n": 0}
+
+    def flaky_factory():
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("refresh failed")
+        return _client_factory()
+
+    def worker_fn(job, client):
+        return [job]
+
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        list(run_worker_pool(list(range(10)), worker_fn, flaky_factory, concurrency=1, session_refresh_requests=2))
