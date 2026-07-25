@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import itertools
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from autosmart24.config import BrandConfig
 from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.scraping.change_detection import diff_sweep
+from autosmart24.scraping.concurrency import run_worker_pool
 from autosmart24.scraping.crawler import crawl_brand
 from autosmart24.scraping.detail_queue import fetch_detail
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
@@ -30,9 +31,11 @@ def _log_event(session: Session, run: ScrapeRun, level: str, message: str, url: 
 
 def process_detail_backlog(
     session: Session,
-    client: RateLimitedClient,
+    client_factory: Callable[[], RateLimitedClient],
     brand: BrandConfig,
     run: ScrapeRun,
+    concurrency: int = 1,
+    session_refresh_requests: int = 30,
     batch_size: int = DETAIL_BATCH_SIZE,
     fetch_detail_fn=fetch_detail,
     exclude_ids: set[str] = frozenset(),
@@ -52,55 +55,61 @@ def process_detail_backlog(
     if not pending:
         return 0
 
+    rows_by_id = {row.id: row for row in pending}
+    jobs = [(row.id, row.url) for row in pending]
     enriched = 0
     sold = 0
     now = _now()
 
-    for row in pending:
-        try:
-            result = fetch_detail_fn(client, row.url)
-        except BlockedError as exc:
-            run.status = "blocked"
-            run.errors_count += 1
-            _log_event(session, run, "blocked", str(exc), url=exc.url)
-            break
+    def _detail_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
+        listing_id, url = job
+        return [(listing_id, fetch_detail_fn(client, url))]
 
-        row.last_checked_at = now
-        if result.sold:
-            row.status = "sold"
-            row.sold_at = now
-            sold += 1
-            continue
+    try:
+        for listing_id, result in run_worker_pool(
+            jobs, _detail_worker, client_factory, concurrency, session_refresh_requests
+        ):
+            row = rows_by_id[listing_id]
+            row.last_checked_at = now
+            if result.sold:
+                row.status = "sold"
+                row.sold_at = now
+                sold += 1
+                continue
 
-        detail = result.data
-        if detail["price"] is not None and detail["price"] != row.price:
-            row.price = detail["price"]
-            session.add(PriceHistory(listing_id=row.id, price=detail["price"], recorded_at=now))
+            detail = result.data
+            if detail["price"] is not None and detail["price"] != row.price:
+                row.price = detail["price"]
+                session.add(PriceHistory(listing_id=row.id, price=detail["price"], recorded_at=now))
 
-        row.power_kw = detail["power_kw"]
-        row.power_cv = detail["power_cv"]
-        row.displacement_ccm = detail["displacement_ccm"]
-        row.body_type = detail["body_type"]
-        row.body_color = detail["body_color"]
-        row.num_seats = detail["num_seats"]
-        row.num_doors = detail["num_doors"]
-        row.num_previous_owners = detail["num_previous_owners"]
-        row.province = detail["province"]
-        row.latitude = detail["latitude"]
-        row.longitude = detail["longitude"]
-        row.vat_exposed = detail["vat_exposed"]
-        row.price_evaluation_category = detail["price_evaluation_category"]
-        row.price_evaluation_median = detail["price_evaluation_median"]
-        row.created_at_source = detail["created_at_source"]
-        row.raw_detail = detail["raw_detail"]
-        row.detail_scraped = True
-        enriched += 1
+            row.power_kw = detail["power_kw"]
+            row.power_cv = detail["power_cv"]
+            row.displacement_ccm = detail["displacement_ccm"]
+            row.body_type = detail["body_type"]
+            row.body_color = detail["body_color"]
+            row.num_seats = detail["num_seats"]
+            row.num_doors = detail["num_doors"]
+            row.num_previous_owners = detail["num_previous_owners"]
+            row.province = detail["province"]
+            row.latitude = detail["latitude"]
+            row.longitude = detail["longitude"]
+            row.vat_exposed = detail["vat_exposed"]
+            row.price_evaluation_category = detail["price_evaluation_category"]
+            row.price_evaluation_median = detail["price_evaluation_median"]
+            row.created_at_source = detail["created_at_source"]
+            row.raw_detail = detail["raw_detail"]
+            row.detail_scraped = True
+            enriched += 1
+    except BlockedError as exc:
+        run.status = "blocked"
+        run.errors_count += 1
+        _log_event(session, run, "blocked", str(exc), url=exc.url)
+        return sold
 
     _log_event(
         session, run, "info",
         f"Detail backlog batch: enriched {enriched}, confirmed sold {sold} (batch size {len(pending)})",
     )
-
     return sold
 
 
@@ -115,11 +124,14 @@ def _iter_batches(iterable: Iterable[dict], batch_size: int) -> Iterator[list[di
 
 def run_brand_sweep(
     session: Session,
-    client: RateLimitedClient,
+    client_factory: Callable[[], RateLimitedClient],
     brand: BrandConfig,
     crawl_fn=crawl_brand,
     fetch_detail_fn=fetch_detail,
     batch_size: int = NEW_LISTING_COMMIT_BATCH_SIZE,
+    concurrency: int = 1,
+    year_from: int | None = None,
+    session_refresh_requests: int = 30,
 ) -> ScrapeRun:
     run = ScrapeRun(brand=brand.display_name, started_at=_now(), status="running")
     session.add(run)
@@ -138,7 +150,14 @@ def run_brand_sweep(
         active_rows_by_id = {row.id: row for row in active_rows}
 
         try:
-            for batch in _iter_batches(crawl_fn(client, brand.slug, brand.make_id), batch_size):
+            for batch in _iter_batches(
+                crawl_fn(
+                    client_factory, brand.slug, brand.make_id,
+                    year_from=year_from, concurrency=concurrency,
+                    session_refresh_requests=session_refresh_requests,
+                ),
+                batch_size,
+            ):
                 batch_snippets = {s["id"]: s for s in batch}
                 batch_prices = {listing_id: s["price"] for listing_id, s in batch_snippets.items()}
                 diff = diff_sweep(batch_prices, active_db_prices)
@@ -217,34 +236,40 @@ def run_brand_sweep(
             return run
 
         missing_ids = set(active_db_prices.keys()) - seen_ids
-
-        sold_count = 0
         now = _now()
-        for listing_id in missing_ids:
-            row = active_rows_by_id[listing_id]
-            try:
-                result = fetch_detail_fn(client, row.url)
-            except BlockedError as exc:
-                run.status = "blocked"
-                run.errors_count += 1
-                _log_event(session, run, "blocked", str(exc), url=exc.url)
-                break
+        sold_count = 0
+        missing_jobs = [(listing_id, active_rows_by_id[listing_id].url) for listing_id in missing_ids]
 
-            row.last_checked_at = now
-            if result.sold:
-                row.status = "sold"
-                row.sold_at = now
-                sold_count += 1
-            else:
-                run.errors_count += 1
-                _log_event(
-                    session, run, "warning",
-                    f"Listing {listing_id} not found in sweep but still active on detail page",
-                    url=row.url,
-                )
+        def _missing_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
+            listing_id, url = job
+            return [(listing_id, fetch_detail_fn(client, url))]
+
+        try:
+            for listing_id, result in run_worker_pool(
+                missing_jobs, _missing_worker, client_factory, concurrency, session_refresh_requests
+            ):
+                row = active_rows_by_id[listing_id]
+                row.last_checked_at = now
+                if result.sold:
+                    row.status = "sold"
+                    row.sold_at = now
+                    sold_count += 1
+                else:
+                    run.errors_count += 1
+                    _log_event(
+                        session, run, "warning",
+                        f"Listing {listing_id} not found in sweep but still active on detail page",
+                        url=row.url,
+                    )
+        except BlockedError as exc:
+            run.status = "blocked"
+            run.errors_count += 1
+            _log_event(session, run, "blocked", str(exc), url=exc.url)
 
         backlog_sold_count = process_detail_backlog(
-            session, client, brand, run, fetch_detail_fn=fetch_detail_fn, exclude_ids=new_ids
+            session, client_factory, brand, run,
+            concurrency=concurrency, session_refresh_requests=session_refresh_requests,
+            fetch_detail_fn=fetch_detail_fn, exclude_ids=new_ids,
         )
 
         run.listings_seen = listings_seen

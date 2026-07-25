@@ -1,6 +1,9 @@
 import datetime as dt
+import json
 
+import httpx
 import pytest
+import respx
 from sqlalchemy.orm import sessionmaker
 
 from autosmart24.config import BrandConfig
@@ -8,8 +11,36 @@ from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
+from autosmart24.scraping.search_query import build_search_url
 
 BRAND = BrandConfig(slug="fiat", make_id=28, display_name="Fiat")
+
+
+def _next_data_html(page_props: dict) -> str:
+    payload = {"props": {"pageProps": page_props}}
+    return f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(payload)}</script></body></html>'
+
+
+def _fake_listing(listing_id: str, price: int) -> dict:
+    return {
+        "id": listing_id,
+        "crossReferenceId": listing_id,
+        "url": f"/annunci/{listing_id}",
+        "price": {"priceRaw": price},
+        "vehicle": {
+            "make": "Fiat",
+            "model": "Panda",
+            "modelGroup": "Panda",
+            "variant": None,
+            "motorTypeName": "1.0",
+            "modelVersionInput": None,
+            "transmission": "Manuale",
+            "fuel": "Benzina",
+        },
+        "location": {"city": "Roma - Roma - RM", "zip": "00100"},
+        "seller": {"type": "Dealer", "companyName": "Test Dealer"},
+        "tracking": {"firstRegistration": "01-2020", "mileage": "50000"},
+    }
 
 
 def _client() -> RateLimitedClient:
@@ -48,11 +79,28 @@ def _existing_listing(listing_id: str, price: int, detail_scraped: bool = True) 
     )
 
 
+def _fake_detail_data(listing_id: str) -> dict:
+    return {
+        "price": None, "power_kw": None, "power_cv": None, "displacement_ccm": None,
+        "body_type": None, "body_color": None, "num_seats": None, "num_doors": None,
+        "num_previous_owners": None, "province": None, "latitude": None, "longitude": None,
+        "vat_exposed": None, "price_evaluation_category": None, "price_evaluation_median": None,
+        "created_at_source": None, "raw_detail": {"id": listing_id},
+    }
+
+
+def _noop_fetch_detail(client, url):
+    """Detail fetch that always reports 'still active' and enriches nothing.
+    Used by tests that reach the detail phase but do not assert on its results --
+    without it those tests would issue real network requests."""
+    return DetailResult(sold=False, data=_fake_detail_data(url))
+
+
 def test_run_brand_sweep_records_new_listing(db_session):
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("new-1", 15000)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
 
     assert run.status == "success"
     assert run.new_listings == 1
@@ -68,10 +116,10 @@ def test_run_brand_sweep_detects_price_change(db_session):
     db_session.add(_existing_listing("existing-1", 10000))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("existing-1", 12000)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
 
     assert run.price_changes == 1
     listing = db_session.get(Listing, "existing-1")
@@ -84,13 +132,13 @@ def test_run_brand_sweep_confirms_sold_when_detail_confirms(db_session):
     db_session.add(_existing_listing("missing-1", 10000))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         return iter(())
 
     def fake_fetch_detail(client, url):
         return DetailResult(sold=True)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.sold_detected == 1
     listing = db_session.get(Listing, "missing-1")
@@ -102,13 +150,13 @@ def test_run_brand_sweep_keeps_active_when_detail_still_active(db_session):
     db_session.add(_existing_listing("anomaly-1", 10000))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         return iter(())
 
     def fake_fetch_detail(client, url):
         return DetailResult(sold=False, data={"source_status": "Active"})
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.sold_detected == 0
     listing = db_session.get(Listing, "anomaly-1")
@@ -119,11 +167,11 @@ def test_run_brand_sweep_keeps_active_when_detail_still_active(db_session):
 
 
 def test_run_brand_sweep_marks_blocked_on_blocked_error(db_session):
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("x-1", 1000)
         raise BlockedError(403, "https://www.autoscout24.it/lst/fiat")
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
 
     assert run.status == "blocked"
     assert db_session.get(Listing, "x-1") is None
@@ -133,7 +181,7 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
     db_session.add(_existing_listing("pending-1", 10000, detail_scraped=False))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("pending-1", 10000)
 
     def fake_fetch_detail(client, url):
@@ -148,7 +196,7 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
             },
         )
 
-    run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     listing = db_session.get(Listing, "pending-1")
     assert listing.detail_scraped is True
@@ -159,14 +207,14 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
 def test_run_brand_sweep_excludes_same_run_new_listings_from_backlog(db_session):
     called_with: list[str] = []
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("brand-new-1", 9000)
 
     def fake_fetch_detail(client, url):
         called_with.append(url)
         return DetailResult(sold=True)
 
-    run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     listing = db_session.get(Listing, "brand-new-1")
     assert listing is not None
@@ -182,14 +230,14 @@ def test_run_brand_sweep_marks_blocked_and_stops_on_block_during_missing_ids_loo
 
     call_count = {"n": 0}
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         return iter(())
 
     def fake_fetch_detail(client, url):
         call_count["n"] += 1
         raise BlockedError(403, url)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.status == "blocked"
     assert call_count["n"] == 1
@@ -199,13 +247,13 @@ def test_run_brand_sweep_marks_blocked_on_block_during_detail_backlog(db_session
     db_session.add(_existing_listing("pending-blocked", 10000, detail_scraped=False))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("pending-blocked", 10000)
 
     def fake_fetch_detail(client, url):
         raise BlockedError(403, url)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.status == "blocked"
 
@@ -215,13 +263,13 @@ def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
     db_session.add(_existing_listing("anomaly-b", 20000))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         return iter(())
 
     def fake_fetch_detail(client, url):
         return DetailResult(sold=False, data={"source_status": "Active"})
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.errors_count == 2
 
@@ -236,7 +284,7 @@ def test_process_detail_backlog_returns_sold_count(db_session):
     def fake_fetch_detail(client, url):
         return DetailResult(sold=True)
 
-    sold = process_detail_backlog(db_session, _client(), BRAND, run, fetch_detail_fn=fake_fetch_detail)
+    sold = process_detail_backlog(db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail)
 
     assert sold == 1
 
@@ -249,13 +297,13 @@ def test_run_brand_sweep_counts_backlog_confirmed_sold_in_sold_detected(db_sessi
     db_session.add(_existing_listing("backlog-sold-2", 10000, detail_scraped=False))
     db_session.commit()
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("backlog-sold-2", 10000)
 
     def fake_fetch_detail(client, url):
         return DetailResult(sold=True)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.sold_detected == 1
     listing = db_session.get(Listing, "backlog-sold-2")
@@ -268,7 +316,7 @@ def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
     finishes. We assert this from inside the crawl generator itself, before
     it has yielded anything, using a second session on the same engine."""
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         other = sessionmaker(bind=db_session.bind)()
         try:
             run = other.query(ScrapeRun).filter_by(brand="Fiat").one()
@@ -277,7 +325,7 @@ def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
             other.close()
         yield _fake_snippet("early-visible-1", 5000)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
 
     assert run.status == "success"
 
@@ -287,7 +335,7 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
     visible via another session) before the crawl generator has finished
     yielding all listings."""
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("batch-1", 1000)
         yield _fake_snippet("batch-2", 2000)
 
@@ -302,7 +350,7 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
         yield _fake_snippet("batch-4", 4000)
         yield _fake_snippet("batch-5", 5000)
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, batch_size=2)
 
     assert run.status == "success"
     assert run.new_listings == 5
@@ -349,13 +397,13 @@ def test_run_brand_sweep_marks_error_and_preserves_partial_state_on_unexpected_e
     the already-committed listings preserved, and the original exception
     must still propagate for operator visibility in logs."""
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("safe-1", 1000)
         yield _fake_snippet("safe-2", 2000)
         raise ValueError("boom - unexpected crawler failure")
 
     with pytest.raises(ValueError, match="boom"):
-        run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+        run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, batch_size=2)
 
     run = db_session.query(ScrapeRun).filter_by(brand="Fiat").one()
     assert run.status == "error"
@@ -377,15 +425,63 @@ def test_run_brand_sweep_preserves_committed_batches_on_block(db_session):
     DB and reflected in the run's partial counters, instead of discarding
     the whole sweep."""
 
-    def fake_crawl(client, brand_slug, make_id):
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
         yield _fake_snippet("survivor-1", 1000)
         yield _fake_snippet("survivor-2", 2000)
         raise BlockedError(403, "https://www.autoscout24.it/lst/fiat")
 
-    run = run_brand_sweep(db_session, _client(), BRAND, crawl_fn=fake_crawl, batch_size=2)
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, batch_size=2)
 
     assert run.status == "blocked"
     assert run.new_listings == 2
     assert run.listings_seen == 2
     surviving_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
     assert surviving_ids == {"survivor-1", "survivor-2"}
+
+
+def test_run_brand_sweep_threads_year_from_and_concurrency_to_crawl_fn(db_session):
+    received = {}
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        received.update(kwargs)
+        return iter([])
+
+    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, year_from=2021, concurrency=4)
+
+    assert received["year_from"] == 2021
+    assert received["concurrency"] == 4
+
+
+@respx.mock
+def test_run_brand_sweep_works_end_to_end_with_the_real_crawl_brand(db_session):
+    """Exercises the real (default) crawl_fn=crawl_brand, unlike every other
+    test in this module which injects a fake. This is the only test that goes
+    through the genuine run_brand_sweep -> crawl_brand -> run_worker_pool ->
+    RateLimitedClient path, so a future signature drift between run_manager.py
+    and crawler.py/concurrency.py (like the one that broke api/app.py's
+    production call site) fails here instead of only in production."""
+    discovery_page_props = {
+        "numberOfResults": 1,
+        "numberOfPages": 1,
+        "listings": [_fake_listing("e2e-discovery-1", 1000)],
+        "taxonomy": {"models": {str(BRAND.make_id): [{"value": 1746, "label": "Panda"}]}},
+    }
+    model_page_props = {
+        "numberOfResults": 1,
+        "numberOfPages": 1,
+        "listings": [_fake_listing("e2e-1", 12345)],
+    }
+
+    discovery_url = build_search_url(BRAND.slug, page=1, make_id=BRAND.make_id)
+    model_url = build_search_url(BRAND.slug, page=1, make_id=BRAND.make_id, model_id=1746)
+
+    respx.get(discovery_url).mock(return_value=httpx.Response(200, text=_next_data_html(discovery_page_props)))
+    respx.get(model_url).mock(return_value=httpx.Response(200, text=_next_data_html(model_page_props)))
+
+    run = run_brand_sweep(db_session, _client, BRAND, fetch_detail_fn=_noop_fetch_detail)
+
+    assert run.status == "success"
+    assert run.new_listings == 1
+    listing = db_session.get(Listing, "e2e-1")
+    assert listing is not None
+    assert listing.price == 12345
