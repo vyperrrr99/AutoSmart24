@@ -256,6 +256,9 @@ def test_run_brand_sweep_marks_blocked_on_block_during_detail_backlog(db_session
     run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
     assert run.status == "blocked"
+    events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
+    assert any(e.level == "blocked" for e in events)
+    assert any(e.level == "info" and e.message.startswith("Detail backlog batch:") for e in events)
 
 
 def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
@@ -439,17 +442,21 @@ def test_run_brand_sweep_preserves_committed_batches_on_block(db_session):
     assert surviving_ids == {"survivor-1", "survivor-2"}
 
 
-def test_run_brand_sweep_threads_year_from_and_concurrency_to_crawl_fn(db_session):
+def test_run_brand_sweep_threads_year_from_concurrency_and_session_refresh_requests_to_crawl_fn(db_session):
     received = {}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
         received.update(kwargs)
         return iter([])
 
-    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, year_from=2021, concurrency=4)
+    run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        year_from=2021, concurrency=4, session_refresh_requests=17,
+    )
 
     assert received["year_from"] == 2021
     assert received["concurrency"] == 4
+    assert received["session_refresh_requests"] == 17
 
 
 @respx.mock

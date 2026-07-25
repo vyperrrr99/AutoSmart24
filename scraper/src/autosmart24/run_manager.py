@@ -104,7 +104,6 @@ def process_detail_backlog(
         run.status = "blocked"
         run.errors_count += 1
         _log_event(session, run, "blocked", str(exc), url=exc.url)
-        return sold
 
     _log_event(
         session, run, "info",
