@@ -35,3 +35,38 @@ body {
 .status-bloccato { background: #7f1d1d; }
 .status-in-esecuzione { background: #1e3a8a; }
 .status-errore { background: #991b1b; }
+
+.manage-brands section {
+  background: #1a1d24;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.manage-brands label {
+  display: inline-flex;
+  flex-direction: column;
+  margin-right: 12px;
+  font-size: 0.85em;
+}
+
+.manage-brands input[type="number"],
+.manage-brands input[type="text"],
+.manage-brands select {
+  margin-top: 4px;
+}
+
+.catalog-list {
+  max-height: 240px;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+}
+
+.tracked-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #2a2e37;
+}
