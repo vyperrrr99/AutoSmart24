@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import time
 from dataclasses import dataclass, field
@@ -8,6 +9,8 @@ from typing import Callable
 import httpx
 
 from autosmart24.scraping.rate_control import BlockRateTracker
+
+logger = logging.getLogger(__name__)
 
 USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -36,6 +39,7 @@ class RateLimitedClient:
     user_agent: str = USER_AGENTS[0]
     rate_controller: BlockRateTracker | None = None
     sleep_fn: Callable[[float], None] = field(default=time.sleep)
+    retries: int = 2
     client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -46,18 +50,32 @@ class RateLimitedClient:
         )
 
     def get(self, url: str) -> httpx.Response:
-        multiplier = self.rate_controller.delay_multiplier() if self.rate_controller else 1.0
-        delay = random.uniform(self.min_delay_seconds, self.max_delay_seconds) * multiplier
-        self.sleep_fn(delay)
-        response = self.client.get(url)
-        if response.status_code in BLOCK_STATUS_CODES:
+        attempts = self.retries + 1
+        for attempt in range(1, attempts + 1):
+            multiplier = self.rate_controller.delay_multiplier() if self.rate_controller else 1.0
+            delay = random.uniform(self.min_delay_seconds, self.max_delay_seconds) * multiplier
+            self.sleep_fn(delay)
+            try:
+                response = self.client.get(url)
+            except (httpx.TimeoutException, httpx.NetworkError):
+                if attempt >= attempts:
+                    raise
+                logger.warning(
+                    "Transient network error fetching %s, retrying (attempt %d/%d)",
+                    url,
+                    attempt + 1,
+                    attempts,
+                )
+                continue
+            if response.status_code in BLOCK_STATUS_CODES:
+                if self.rate_controller:
+                    self.rate_controller.record_blocked()
+                raise BlockedError(response.status_code, url)
             if self.rate_controller:
-                self.rate_controller.record_blocked()
-            raise BlockedError(response.status_code, url)
-        if self.rate_controller:
-            self.rate_controller.record_success()
-        response.raise_for_status()
-        return response
+                self.rate_controller.record_success()
+            response.raise_for_status()
+            return response
+        raise AssertionError("unreachable: get() loop exited without returning or raising")
 
     def close(self) -> None:
         self.client.close()
@@ -68,6 +86,7 @@ def make_client(
     max_delay_seconds: float,
     rate_controller: BlockRateTracker | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    retries: int = 2,
 ) -> RateLimitedClient:
     return RateLimitedClient(
         min_delay_seconds=min_delay_seconds,
@@ -75,4 +94,5 @@ def make_client(
         user_agent=random.choice(USER_AGENTS),
         rate_controller=rate_controller,
         sleep_fn=sleep_fn,
+        retries=retries,
     )

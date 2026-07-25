@@ -89,3 +89,83 @@ def test_get_records_blocked_on_rate_controller_and_applies_backoff_multiplier()
     with pytest.raises(BlockedError):
         client.get("https://example.test/blocked")
     assert delays[-1] == 20.0
+
+
+@respx.mock
+def test_get_retries_transient_timeout_then_succeeds():
+    route = respx.get("https://example.test/flaky")
+    route.side_effect = [httpx.ReadTimeout("timed out"), httpx.Response(200, text="ok")]
+
+    response = _instant_client().get("https://example.test/flaky")
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_get_exhausts_retries_and_raises_original_timeout():
+    route = respx.get("https://example.test/always-flaky")
+    route.side_effect = httpx.ReadTimeout("timed out")
+
+    with pytest.raises(httpx.ReadTimeout):
+        _instant_client().get("https://example.test/always-flaky")
+
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_get_does_not_retry_blocked_error():
+    route = respx.get("https://example.test/blocked-no-retry")
+    route.mock(return_value=httpx.Response(403, text="forbidden"))
+
+    with pytest.raises(BlockedError):
+        _instant_client().get("https://example.test/blocked-no-retry")
+
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_get_does_not_retry_http_status_error():
+    route = respx.get("https://example.test/server-error")
+    route.mock(return_value=httpx.Response(500, text="boom"))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _instant_client().get("https://example.test/server-error")
+
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_get_retry_records_success_once_and_never_records_blocked():
+    route = respx.get("https://example.test/flaky-tracked")
+    route.side_effect = [httpx.ReadTimeout("timed out"), httpx.Response(200, text="ok")]
+    tracker = BlockRateTracker()
+
+    client = RateLimitedClient(
+        min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None, rate_controller=tracker
+    )
+    success_calls = []
+    blocked_calls = []
+    tracker.record_success = lambda: success_calls.append(1)  # type: ignore[method-assign]
+    tracker.record_blocked = lambda: blocked_calls.append(1)  # type: ignore[method-assign]
+
+    client.get("https://example.test/flaky-tracked")
+
+    assert len(success_calls) == 1
+    assert len(blocked_calls) == 0
+
+
+@respx.mock
+def test_get_respects_configured_retry_count_of_zero():
+    route = respx.get("https://example.test/no-retries")
+    route.side_effect = httpx.ReadTimeout("timed out")
+
+    client = RateLimitedClient(
+        min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None, retries=0
+    )
+
+    with pytest.raises(httpx.ReadTimeout):
+        client.get("https://example.test/no-retries")
+
+    assert route.call_count == 1
