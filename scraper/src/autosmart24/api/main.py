@@ -127,11 +127,18 @@ def create_app(
     @app.post("/brands/bulk", response_model=list[BrandStatusOut])
     def add_brands(body: AddBrandsRequest, session: Session = Depends(get_session)):
         now = dt.datetime.utcnow()
+        # Validate ALL make_ids against the catalog before creating any rows
+        # or touching the live scheduler. Otherwise a later invalid id in the
+        # same request would abort the loop (and roll back the DB) after an
+        # earlier brand's cron job was already registered, leaving an orphan
+        # scheduler job for a brand the API reports as untracked.
+        for make_id in body.make_ids:
+            if session.get(BrandCatalog, make_id) is None:
+                raise HTTPException(status_code=400, detail=f"Unknown make_id in catalog: {make_id}")
+
         touched: list[TrackedBrand] = []
         for make_id in body.make_ids:
             catalog_entry = session.get(BrandCatalog, make_id)
-            if catalog_entry is None:
-                raise HTTPException(status_code=400, detail=f"Unknown make_id in catalog: {make_id}")
             row = session.get(TrackedBrand, make_id)
             if row is None:
                 row = TrackedBrand(
@@ -152,6 +159,9 @@ def create_app(
         session.commit()
         return [_to_brand_status(session, row) for row in touched]
 
+    # This route MUST stay declared before @app.patch("/brands/{brand_slug}"),
+    # or FastAPI will match "apply-defaults" against the {brand_slug} path
+    # parameter of that route instead of this one.
     @app.patch("/brands/apply-defaults", response_model=list[BrandStatusOut])
     def apply_defaults(body: ApplyDefaultsRequest, session: Session = Depends(get_session)):
         fields = body.model_fields_set
@@ -213,16 +223,16 @@ def create_app(
     def pause_brand(brand_slug: str, session: Session = Depends(get_session)):
         row = _find_tracked_brand(session, brand_slug)
         row.paused = True
-        session.commit()
         scheduler.pause_brand(brand_slug)
+        session.commit()
         return {"paused": True}
 
     @app.post("/brands/{brand_slug}/resume")
     def resume_brand(brand_slug: str, session: Session = Depends(get_session)):
         row = _find_tracked_brand(session, brand_slug)
         row.paused = False
-        session.commit()
         scheduler.resume_brand(brand_slug)
+        session.commit()
         return {"paused": False}
 
     @app.post("/brands/{brand_slug}/run-now")

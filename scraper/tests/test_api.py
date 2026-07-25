@@ -171,6 +171,19 @@ def test_add_brands_bulk_rejects_unknown_make_id(db_session):
     assert response.status_code == 400
 
 
+def test_add_brands_bulk_mixed_valid_and_unknown_make_id_leaves_no_orphan_job(db_session):
+    _seed_catalog(db_session)
+
+    app, scheduler = _app_with_session(db_session)
+    client = TestClient(app)
+
+    response = client.post("/brands/bulk", json={"make_ids": [28, 999999]})
+
+    assert response.status_code == 400
+    assert db_session.query(TrackedBrand).count() == 0
+    assert scheduler.scheduler.get_job("fiat") is None
+
+
 def test_update_brand_patches_only_provided_fields(db_session):
     _seed_catalog(db_session)
     _seed_tracked(db_session, FIAT_CATALOG, year_from_years=5, schedule_hour=3, schedule_minute=0)
@@ -215,6 +228,24 @@ def test_apply_defaults_overwrites_all_tracked_brands(db_session):
     assert all(row["schedule_hour"] == 2 for row in body)
 
 
+def test_apply_defaults_leaves_omitted_field_untouched(db_session):
+    _seed_catalog(db_session)
+    _seed_tracked(db_session, FIAT_CATALOG, schedule_day_of_week="mon")
+
+    app, _ = _app_with_session(db_session)
+    client = TestClient(app)
+
+    # schedule_day_of_week is deliberately omitted from the body.
+    response = client.patch(
+        "/brands/apply-defaults", json={"year_from_years": 3, "schedule_hour": 2, "schedule_minute": 0}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    fiat_row = next(row for row in body if row["slug"] == "fiat")
+    assert fiat_row["schedule_day_of_week"] == "mon"
+
+
 def test_delete_brand_removes_row_and_job(db_session):
     _seed_catalog(db_session)
     _seed_tracked(db_session, FIAT_CATALOG)
@@ -245,6 +276,24 @@ def test_pause_and_resume_brand_via_api(db_session):
     assert scheduler.is_paused("fiat") is False
 
 
+def test_pause_tracked_brand_without_scheduler_job_still_persists_paused(db_session):
+    _seed_catalog(db_session)
+    _seed_tracked(db_session, FIAT_CATALOG)
+
+    app, scheduler = _app_with_session(db_session)
+    client = TestClient(app)
+    # Simulate a tracked brand with no live scheduler job (e.g. never
+    # (re)scheduled after creation, or removed out-of-band).
+    scheduler.scheduler.remove_job("fiat")
+    assert scheduler.scheduler.get_job("fiat") is None
+
+    response = client.post("/brands/fiat/pause")
+
+    assert response.status_code == 200
+    row = db_session.get(TrackedBrand, FIAT_CATALOG.make_id)
+    assert row.paused is True
+
+
 def test_pause_persists_to_the_tracked_brand_row(db_session):
     _seed_catalog(db_session)
     _seed_tracked(db_session, FIAT_CATALOG)
@@ -256,6 +305,55 @@ def test_pause_persists_to_the_tracked_brand_row(db_session):
 
     row = db_session.get(TrackedBrand, 28)
     assert row.paused is True
+
+
+def test_list_brands_reports_paused_true_after_pause(db_session):
+    _seed_catalog(db_session)
+    _seed_tracked(db_session, FIAT_CATALOG)
+
+    app, _ = _app_with_session(db_session)
+    client = TestClient(app)
+
+    client.post("/brands/fiat/pause")
+    fiat_row = next(row for row in client.get("/brands").json() if row["slug"] == "fiat")
+
+    assert fiat_row["paused"] is True
+
+
+def test_patching_schedule_of_a_paused_brand_leaves_it_paused(db_session):
+    _seed_catalog(db_session)
+    _seed_tracked(db_session, FIAT_CATALOG)
+
+    app, scheduler = _app_with_session(db_session)
+    # Must run against a *started* scheduler: add_job(replace_existing=True)
+    # only actually replaces the existing job once queued pending jobs are
+    # flushed to the jobstore on start(); against a non-started scheduler the
+    # stale (still-paused) job object would be returned regardless of
+    # whether _reschedule's re-pause branch runs, silently testing nothing.
+    scheduler.scheduler.start(paused=True)
+    try:
+        client = TestClient(app)
+
+        client.post("/brands/fiat/pause")
+        response = client.patch("/brands/fiat", json={"schedule_hour": 7})
+
+        assert response.status_code == 200
+        assert scheduler.is_paused("fiat") is True
+        assert response.json()["paused"] is True
+    finally:
+        scheduler.shutdown()
+
+
+def test_patch_brand_with_invalid_schedule_hour_returns_422(db_session):
+    _seed_catalog(db_session)
+    _seed_tracked(db_session, BMW_CATALOG)
+
+    app, _ = _app_with_session(db_session)
+    client = TestClient(app)
+
+    response = client.patch("/brands/bmw", json={"schedule_hour": 99})
+
+    assert response.status_code == 422
 
 
 def test_run_now_triggers_callback(db_session):

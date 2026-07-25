@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RunOut(BaseModel):
@@ -56,19 +56,19 @@ class AddBrandsRequest(BaseModel):
     make_ids: list[int]
     year_from_years: int | None = None
     schedule_day_of_week: str | None = None
-    schedule_hour: int = 3
-    schedule_minute: int = 0
+    schedule_hour: int = Field(default=3, ge=0, le=23)
+    schedule_minute: int = Field(default=0, ge=0, le=59)
 
 
 class UpdateBrandRequest(BaseModel):
     year_from_years: int | None = None
     schedule_day_of_week: str | None = None
-    schedule_hour: int | None = None
-    schedule_minute: int | None = None
+    schedule_hour: int | None = Field(default=None, ge=0, le=23)
+    schedule_minute: int | None = Field(default=None, ge=0, le=59)
 
 
 class ApplyDefaultsRequest(BaseModel):
     year_from_years: int | None = None
     schedule_day_of_week: str | None = None
-    schedule_hour: int | None = None
-    schedule_minute: int | None = None
+    schedule_hour: int | None = Field(default=None, ge=0, le=23)
+    schedule_minute: int | None = Field(default=None, ge=0, le=59)

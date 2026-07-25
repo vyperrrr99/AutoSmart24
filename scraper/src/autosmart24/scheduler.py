@@ -59,10 +59,16 @@ class BrandScheduler:
             self.scheduler.remove_job(brand_slug)
 
     def pause_brand(self, brand_slug: str) -> None:
-        self.scheduler.pause_job(brand_slug)
+        # A tracked brand without a live job (not yet scheduled, or removed)
+        # should still be able to record its paused state; that state then
+        # applies correctly whenever the job is (re)created. Silently
+        # succeeding here is right, matching remove_brand_job's guard below.
+        if self.scheduler.get_job(brand_slug) is not None:
+            self.scheduler.pause_job(brand_slug)
 
     def resume_brand(self, brand_slug: str) -> None:
-        self.scheduler.resume_job(brand_slug)
+        if self.scheduler.get_job(brand_slug) is not None:
+            self.scheduler.resume_job(brand_slug)
 
     def is_paused(self, brand_slug: str) -> bool:
         job = self.scheduler.get_job(brand_slug)
