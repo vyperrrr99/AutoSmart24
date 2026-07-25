@@ -16,7 +16,6 @@ services:
       - postgres
     environment:
       DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@postgres:5432/autosmart24
-      SCRAPE_INTERVAL_DAYS: "4"
       SCRAPE_MIN_DELAY_SECONDS: "3"
       SCRAPE_MAX_DELAY_SECONDS: "8"
       SCRAPE_CONCURRENCY: "6"

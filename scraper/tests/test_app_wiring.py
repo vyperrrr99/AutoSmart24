@@ -20,11 +20,11 @@ specifically to catch that regression again.
 
 from __future__ import annotations
 
-import datetime as dt
 import importlib
 import sys
 
 import pytest
+from sqlalchemy import select
 
 MODULE_NAME = "autosmart24.api.app"
 
@@ -77,6 +77,50 @@ def test_client_factory_is_a_factory_not_an_instance(imported_app_module):
         other.close()
 
 
-def test_year_from_uses_configured_max_listing_age(imported_app_module):
-    expected = dt.date.today().year - imported_app_module.MAX_LISTING_AGE_YEARS
-    assert imported_app_module._year_from() == expected
+def test_seeds_tracked_brands_from_mvp_brands_on_first_startup(imported_app_module):
+    from autosmart24.db.models import TrackedBrand
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    init_db(module.engine)
+    session = module.session_factory()
+    try:
+        module._seed_tracked_brands_if_empty(session)
+        rows = session.execute(select(TrackedBrand)).scalars().all()
+        assert {row.slug for row in rows} == {"fiat", "volkswagen", "bmw", "audi", "mercedes-benz"}
+        assert all(row.year_from_years == module.SEED_MAX_LISTING_AGE_YEARS for row in rows)
+
+        module._seed_tracked_brands_if_empty(session)  # must be idempotent
+        rows_again = session.execute(select(TrackedBrand)).scalars().all()
+        assert len(rows_again) == 5
+    finally:
+        session.close()
+
+
+def test_seed_is_skipped_when_tracked_brands_already_populated(imported_app_module):
+    import datetime as dt
+
+    from autosmart24.db.models import BrandCatalog, TrackedBrand
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    init_db(module.engine)
+    session = module.session_factory()
+    try:
+        now = dt.datetime.utcnow()
+        session.add(BrandCatalog(make_id=999, display_name="Custom", slug="custom", synced_at=now))
+        session.add(
+            TrackedBrand(
+                make_id=999, slug="custom", display_name="Custom", paused=False,
+                year_from_years=None, schedule_day_of_week=None, schedule_hour=3, schedule_minute=0,
+                created_at=now,
+            )
+        )
+        session.commit()
+
+        module._seed_tracked_brands_if_empty(session)
+
+        rows = session.execute(select(TrackedBrand)).scalars().all()
+        assert {row.slug for row in rows} == {"custom"}  # MVP_BRANDS was NOT seeded on top
+    finally:
+        session.close()
