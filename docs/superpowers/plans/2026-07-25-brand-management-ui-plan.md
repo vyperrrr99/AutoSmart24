@@ -15,7 +15,7 @@
 - The dashboard is the sole monitoring/notification channel — no email/Telegram (unchanged).
 - Single machine, single IP, no IP rotation (unchanged) — this plan does not add concurrency beyond the existing `SCRAPE_CONCURRENCY`/`SCRAPE_SESSION_REFRESH_REQUESTS`/`SCRAPE_MIN_DELAY_SECONDS`/`SCRAPE_MAX_DELAY_SECONDS` knobs; tracking many brands simultaneously is still bound by the same one-IP posture.
 - Scheduling is deliberately simple (optional day-of-week + hour + minute, translating directly to one `CronTrigger`), not full cron syntax — a dropdown and a time picker are buildable in a UI; a cron expression field is not friendly to build or use here.
-- The slug used to build search URLs for a catalog brand is derived automatically from its display name (lowercase, non-alphanumeric runs collapsed to a single hyphen, trimmed) and **must be validated against a representative sample of real catalog data, not assumed correct for all ~290 entries** — Task 2 includes this validation as an explicit step, not an afterthought.
+- The slug used to build search URLs for a catalog brand is derived automatically from its display name (lowercase, non-alphanumeric runs collapsed to a single hyphen, trimmed) and **must be validated against a representative sample of real catalog data, not assumed correct for all ~290 entries** — Task 2 includes this validation as an explicit step, not an afterthought. If Task 2 Step 5 finds a brand whose derived slug is wrong, the correction mechanism is a direct database `UPDATE` on `brand_catalog.slug` (and on `tracked_brands.slug` too, plus a re-schedule, if that brand is already tracked) — not a UI control. `POST /brand-catalog/refresh` (Task 5) deliberately never overwrites an existing row's `slug` on re-sync, precisely so a manual correction survives future refreshes.
 - On first startup after this plan ships, if `tracked_brands` is empty, it is seeded from the existing `MVP_BRANDS` (same 5 brands, same `make_id`/slug) so today's behavior is not silently lost. The seeded schedule (daily at 03:00) is not identical to today's `SCRAPE_INTERVAL_DAYS=4` — this is a deliberate, disclosed behavior change (see Task 6) since interval-days and day/hour scheduling are different paradigms; the user can adjust it immediately from the new UI.
 - Base URL: `https://www.autoscout24.it`.
 
@@ -565,9 +565,9 @@ class BrandScheduler:
 - [ ] **Step 5: Run to confirm pass**
 
 Run: `cd scraper && pytest tests/test_scheduler.py -v`
-Expected: `9 passed` (5 pre-existing, 2 updated + 4 new — note `test_schedule_brand_replaces_existing_job_for_the_same_brand` and the 4 `BrandRunGuard` tests were already there, so: 2 updated scheduling tests + 4 unchanged guard tests + 4 new = 10; if your count differs from 10, read the file and reconcile before moving on — state the actual number and why in your report rather than assuming 9 or 10 is "close enough").
+Expected: `11 passed` (the file currently has 6 tests total: 2 scheduling tests + 4 `BrandRunGuard` tests; Step 2 updates the 2 scheduling tests in place, leaves the 4 `BrandRunGuard` tests untouched, and appends 5 new tests — 2 + 4 + 5 = 11).
 
-If `day_field.is_default` raises `AttributeError` (i.e. this APScheduler version's `BaseField` doesn't expose that attribute), that is a real finding — stop, report it, and inspect `apscheduler.triggers.cron.fields.BaseField`'s actual public surface in the installed version (`python -c "import apscheduler; print(apscheduler.__file__)"` to locate it) to find the correct equivalent check, rather than guessing further.
+`day_field.is_default` is confirmed correct against the installed APScheduler 3.10.4: `BaseField.__init__` sets `self.is_default`, and `CronTrigger.__init__` passes `is_default=True` for any field not explicitly supplied — so `day_of_week=None` yields `is_default=True` and `day_of_week="mon"` yields `is_default=False`, exactly as asserted. No fallback investigation should be needed; if it somehow still raises `AttributeError`, treat that as a real environment discrepancy worth stopping for.
 
 - [ ] **Step 6: Commit**
 
@@ -817,8 +817,12 @@ def create_app(
         for entry in entries:
             existing = session.get(BrandCatalog, entry.make_id)
             if existing is not None:
+                # slug is deliberately NOT overwritten here: it is the
+                # manual-correction safety net for a mis-derived slug (see
+                # the design spec's slug-validation risk note), applied
+                # directly against the database. Clobbering it on every
+                # refresh would silently undo that correction.
                 existing.display_name = entry.display_name
-                existing.slug = entry.slug
                 existing.synced_at = now
             else:
                 session.add(
@@ -1071,6 +1075,25 @@ def test_refresh_brand_catalog_upserts_entries(db_session):
     assert {row["slug"] for row in client.get("/brand-catalog").json()} == {"fiat", "bmw"}
 
 
+def test_refresh_brand_catalog_preserves_a_manually_corrected_slug(db_session):
+    _seed_catalog(db_session, entries=(FIAT_CATALOG,))
+    manually_corrected = db_session.get(BrandCatalog, FIAT_CATALOG.make_id)
+    manually_corrected.slug = "fiat-corrected"
+    db_session.commit()
+
+    def fake_refresh():
+        return [FIAT_CATALOG]  # re-derives "fiat", which must NOT clobber the correction
+
+    app, _ = _app_with_session(db_session, refresh_catalog_fn=fake_refresh)
+    client = TestClient(app)
+
+    client.post("/brand-catalog/refresh")
+
+    row = db_session.get(BrandCatalog, FIAT_CATALOG.make_id)
+    assert row.slug == "fiat-corrected"
+    assert row.display_name == "Fiat"  # display_name still refreshes normally
+
+
 def test_add_brands_bulk_creates_tracked_rows_and_schedules_jobs(db_session):
     _seed_catalog(db_session)
 
@@ -1225,12 +1248,13 @@ Note `_app_with_session`'s bootstrap loop calls `scheduler.schedule_brand(row, .
 - [ ] **Step 4: Run to confirm pass**
 
 Run: `cd scraper && pytest tests/test_api.py -v`
-Expected: all tests pass (17 total: 3 pre-existing unchanged in intent + updates + new coverage for catalog/bulk/patch/apply-defaults/delete/pause-persistence).
+Expected: `17 passed`.
 
-- [ ] **Step 5: Run the full backend suite**
+- [ ] **Step 5: Run the full backend suite — a known, expected failure until Task 6**
 
 Run: `cd scraper && python -m pytest -q`
-Expected: all pass. `api/app.py` still calls `create_app` with the OLD signature at this point — Task 6 fixes that. No test currently imports `api/app.py` directly (confirmed in earlier work this session), so this is expected and not a regression to chase down now.
+
+Expected: **`tests/test_app_wiring.py` fails at collection with 3 errors**, and every other test file passes. This is expected, not a regression to fix now — `tests/test_app_wiring.py`'s `imported_app_module` fixture imports `autosmart24.api.app` directly, and that module's still-unmodified `app = create_app(session_factory=..., scheduler=..., run_now_fn=_run_now_fn)` call now raises `TypeError: create_app() missing 2 required positional arguments: 'run_fn' and 'refresh_catalog_fn'` at import time, because this step just added those two required parameters to `create_app`. Confirm the failure is exactly this `TypeError` (not something else) — Task 6 fixes it by rewriting `api/app.py` to pass both new arguments. Do not modify `api/app.py` or `test_app_wiring.py` in this task; that is Task 6's job.
 
 - [ ] **Step 6: Commit**
 
@@ -1821,8 +1845,13 @@ describe("ManageBrands", () => {
 
     render(<ManageBrands trackedBrands={[trackedFiat]} onBrandsChanged={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByText("BMW")).toBeInTheDocument());
-    expect(screen.queryByText("Fiat", { selector: "li *" })).not.toBeInTheDocument();
+    // Fiat is deliberately still visible elsewhere on the page (in the
+    // tracked-brands list, as trackedFiat) -- querying by plain text would
+    // find it there too. Query by checkbox role+name instead, since only
+    // catalog rows render as checkboxes; the tracked list renders a plain
+    // <span>, so this only matches an addable (i.e. not-yet-tracked) entry.
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "BMW" })).toBeInTheDocument());
+    expect(screen.queryByRole("checkbox", { name: "Fiat" })).not.toBeInTheDocument();
   });
 
   it("filters the catalog by search text", async () => {
@@ -2380,3 +2409,4 @@ Expected: all containers removed cleanly.
 - **Placeholder scan:** no TBD/TODO; every step has runnable code.
 - **Type consistency verified:** `BrandConfig` (unchanged dataclass) remains the type `run_manager.run_brand_sweep`, `scheduler.schedule_brand`, and `run_now_fn`/`run_fn` all accept; `TrackedBrand` rows are converted to it via `_to_brand_config` at every call site in `api/main.py`, and via direct `BrandConfig(...)` construction in `api/app.py`'s startup loop — same shape, no drift. `BrandStatusOut`'s five new fields (Task 4) are populated by `_to_brand_status` (Task 5) and consumed identically by the frontend's extended `BrandStatusOut` interface (Task 7) and by `ManageBrands`/`TrackedBrandRow` (Task 8). `BrandDefaultsPatch` (Task 7) matches the shape `AddBrandsRequest`/`UpdateBrandRequest`/`ApplyDefaultsRequest` (Task 4) expect field-for-field.
 - **Known, disclosed behavior change:** the one-time seed schedule (daily 03:00) does not reproduce `SCRAPE_INTERVAL_DAYS=4` exactly — documented in Global Constraints and in Task 6's seed function docstring, not silently glossed over.
+- **Post-review corrections (fresh-subagent plan review, pre-execution):** two Critical findings fixed — (1) Task 5 Step 5's expectation was wrong: `test_app_wiring.py` imports `api/app.py` directly, so once `create_app` gains two new required parameters in this task, that test file fails at collection with a `TypeError` until Task 6 rewrites `api/app.py` — the step now states this explicitly instead of the false "no test imports app.py directly" claim; (2) Task 8's first `ManageBrands` test asserted `queryByText("Fiat", { selector: "li *" })` which also matches Fiat's entry in the *tracked*-brands list (rendered as a plain `<span>` inside an `<li>`) — changed to `getByRole("checkbox", { name: ... })`, which only matches addable catalog rows. Also fixed: two misstated test-count expectations (Task 3: 11, not 9/10; Task 5: 17, not 17-claimed-as-a-guess) now derived from the actual current file contents rather than an assumption. Also closed a real gap the reviewer found: `POST /brand-catalog/refresh` (Task 5) no longer overwrites `slug` on existing rows, so a manual DB-level slug correction (the design spec's stated safety net for a mis-derived slug) survives future refreshes — a new test (`test_refresh_brand_catalog_preserves_a_manually_corrected_slug`) pins this, and the Global Constraints section now states explicitly that slug correction is a database operation, not a UI feature. The reviewer's other findings (CORS widening, route ordering, cron-field introspection, migration safety, `model_fields_set` semantics, run_manager invariants, frontend/backend contract) were all independently confirmed sound and required no change.
