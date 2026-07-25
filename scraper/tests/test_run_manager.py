@@ -556,3 +556,248 @@ def test_run_brand_sweep_ignores_active_listings_older_than_the_year_floor(db_se
     assert run.sold_detected == 0
     assert run.errors_count == 0
     assert db_session.get(Listing, "old-1").status == "active"
+
+
+def test_process_detail_backlog_parks_a_row_the_pool_reports_nothing_for(db_session, monkeypatch):
+    """Termination guarantee: if the worker pool completes normally but
+    silently reports no result for a job (as opposed to raising, which the
+    older test in this module already covers), that row must be parked in
+    failed_ids for the rest of this call so the LIMIT-ed backlog query does
+    not keep re-selecting it forever. We substitute run_worker_pool itself
+    with a stub that runs the real per-job worker for every job except one,
+    whose result it drops -- exactly the "pool completes normally, reports
+    nothing" scenario the raising test cannot exercise."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(_existing_listing("silent-1", 1000, detail_scraped=False))
+    db_session.add(_existing_listing("silent-2", 2000, detail_scraped=False))
+    db_session.commit()
+
+    call_count = {"n": 0}
+
+    def flaky_pool(jobs, worker_fn, client_factory, concurrency, session_refresh_requests):
+        call_count["n"] += 1
+        if call_count["n"] > 5:
+            # If process_detail_backlog is still re-querying after this many
+            # pages for a single permanently-unreported row, it is looping
+            # instead of parking the row -- fail fast rather than hanging.
+            raise AssertionError(
+                "process_detail_backlog kept re-querying instead of parking "
+                "the row the pool never reported on"
+            )
+        client = client_factory()
+        try:
+            for job in jobs:
+                listing_id, _url = job
+                if listing_id == "silent-1":
+                    continue  # pool completes normally but reports nothing for this job
+                for item in worker_fn(job, client):
+                    yield item
+        finally:
+            client.close()
+
+    monkeypatch.setattr("autosmart24.run_manager.run_worker_pool", flaky_pool)
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    total_sold = process_detail_backlog(
+        db_session, _client, BRAND, run, db_page_size=10, fetch_detail_fn=fake_fetch_detail,
+    )
+
+    assert total_sold == 0
+    assert db_session.get(Listing, "silent-1").detail_scraped is False
+    assert db_session.get(Listing, "silent-2").detail_scraped is True
+
+
+def test_process_detail_backlog_processes_null_first_registration_pending_listing(db_session):
+    """The backlog query's floor predicate must keep NULL first_registration
+    rows in scope (unknown registration date must never be silently treated
+    as out-of-floor)."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    listing = _existing_listing("null-reg-pending-1", 1000, detail_scraped=False)
+    listing.first_registration = None
+    db_session.add(listing)
+    db_session.commit()
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail, year_from=2021,
+    )
+
+    assert db_session.get(Listing, "null-reg-pending-1").detail_scraped is True
+
+
+def test_run_brand_sweep_keeps_null_registration_listings_in_scope_with_year_floor(db_session):
+    """The active-inventory query's floor predicate must likewise keep NULL
+    first_registration rows in scope: dropping them would make such listings
+    invisible to the sweep forever, never sold-confirmed even after they
+    vanish from search results."""
+    listing = _existing_listing("null-reg-active-1", 3000)
+    listing.first_registration = None
+    db_session.add(listing)
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter([])
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        fetch_detail_fn=fake_fetch_detail, year_from=2021,
+    )
+
+    assert run.sold_detected == 1
+    assert db_session.get(Listing, "null-reg-active-1").status == "sold"
+
+
+def test_process_detail_backlog_respects_year_floor_for_pending_listings(db_session):
+    """The backlog query's year-floor filter (untested for the backlog half
+    even though the active-inventory half was covered) must exclude pending
+    listings registered before the floor."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    old_pending = _existing_listing("old-pending-1", 2000, detail_scraped=False)
+    old_pending.first_registration = dt.date(2005, 6, 1)
+    db_session.add(old_pending)
+    db_session.commit()
+
+    def exploding_fetch_detail(client, url):
+        raise AssertionError(f"out-of-floor pending listing must not be detail-fetched: {url}")
+
+    total_sold = process_detail_backlog(
+        db_session, _client, BRAND, run, fetch_detail_fn=exploding_fetch_detail, year_from=2021,
+    )
+
+    assert total_sold == 0
+    assert db_session.get(Listing, "old-pending-1").detail_scraped is False
+
+
+def test_process_detail_backlog_includes_listing_registered_exactly_at_the_year_floor(db_session):
+    """Boundary check: a listing registered in January of the floor year
+    itself must remain in scope (>= floor, not > floor)."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    boundary = _existing_listing("floor-boundary-1", 1500, detail_scraped=False)
+    boundary.first_registration = dt.date(2021, 1, 15)
+    db_session.add(boundary)
+    db_session.commit()
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail, year_from=2021,
+    )
+
+    assert db_session.get(Listing, "floor-boundary-1").detail_scraped is True
+
+
+def test_process_detail_backlog_commits_each_page_before_the_next(db_session, monkeypatch):
+    """A completed detail-backlog page must be durably committed before the
+    next page starts, not merely flushed within the still-open transaction.
+
+    Technique: on this StaticPool-shared-connection test engine, opening a
+    second session bound to the same engine and closing it issues an
+    implicit ROLLBACK on the one shared physical connection -- which wipes
+    out any work the original session had only flushed (still part of the
+    same open transaction) but leaves already-committed work untouched
+    (verified empirically against both the real and a flush()-only mutant).
+    This only manifests when the disruptive second session runs on the SAME
+    thread as db_session, so -- as gap 1's test does for a different reason
+    -- run_worker_pool is substituted with a same-thread stub that still
+    runs the real per-job worker, keeping every session touch on this one
+    thread instead of the real thread pool's worker threads.
+
+    We disrupt on the first job of page 2 and then make that job raise, so
+    process_detail_backlog aborts immediately instead of re-querying and
+    silently re-processing (and thus re-flushing) the very rows the
+    disruption just rolled back -- which would otherwise mask the mutant by
+    healing it on the next iteration."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    base = dt.datetime.utcnow()
+    for i in range(3):
+        row = _existing_listing(f"durable-{i}", 1000 + i, detail_scraped=False)
+        row.first_seen_at = base + dt.timedelta(seconds=i)
+        db_session.add(row)
+    db_session.commit()
+
+    def same_thread_pool(jobs, worker_fn, client_factory, concurrency, session_refresh_requests):
+        client = client_factory()
+        try:
+            for job in jobs:
+                for item in worker_fn(job, client):
+                    yield item
+        finally:
+            client.close()
+
+    monkeypatch.setattr("autosmart24.run_manager.run_worker_pool", same_thread_pool)
+
+    def fake_fetch_detail(client, url):
+        listing_id = url.rsplit("/", 1)[-1]
+        if listing_id == "durable-2":
+            # First (and only) job of the second page: touch a totally
+            # separate session on the same engine, then blow up so
+            # process_detail_backlog cannot re-query and paper over any
+            # damage this just did to page 1's not-yet-committed work.
+            other = sessionmaker(bind=db_session.bind)()
+            other.query(Listing).all()
+            other.close()
+            raise ValueError("boom - simulated permanently broken detail page")
+        return DetailResult(sold=False, data=_fake_detail_data(listing_id))
+
+    with pytest.raises(ValueError, match="boom"):
+        process_detail_backlog(
+            db_session, _client, BRAND, run,
+            db_page_size=2, concurrency=1, fetch_detail_fn=fake_fetch_detail,
+        )
+
+    # Bypass db_session's identity map (which would otherwise keep serving
+    # stale in-memory object state) and force a genuine reload from the
+    # database for the final check.
+    db_session.expire_all()
+    scraped_by_id = {
+        row.id: row.detail_scraped
+        for row in db_session.query(Listing).filter_by(brand="Fiat").all()
+    }
+    assert scraped_by_id["durable-0"] is True
+    assert scraped_by_id["durable-1"] is True
+
+
+def test_run_brand_sweep_skips_detail_backlog_when_already_blocked(db_session):
+    """If the sold-confirmation (missing-ids) phase already got the run
+    blocked, the detail backlog pass must not run afterwards -- entering it
+    would open a fresh client against a site that just returned 403/429."""
+    db_session.add(_existing_listing("missing-blocked-1", 10000))
+    db_session.add(_existing_listing("pending-should-not-run", 5000, detail_scraped=False))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # "Sees" pending-should-not-run again this sweep so it is excluded from
+        # missing_ids, while leaving it detail_scraped=False -- still eligible
+        # for the backlog pass, which must never be reached.
+        yield _fake_snippet("pending-should-not-run", 5000)
+
+    fetch_calls: list[str] = []
+
+    def fake_fetch_detail(client, url):
+        fetch_calls.append(url)
+        raise BlockedError(403, url)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.status == "blocked"
+    assert fetch_calls == ["https://www.autoscout24.it/annunci/missing-blocked-1"]
+    events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
+    assert not any(e.level == "info" and e.message.startswith("Detail backlog page:") for e in events)
