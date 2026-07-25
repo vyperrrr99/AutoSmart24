@@ -1481,6 +1481,13 @@ def process_detail_backlog(
             run.status = "blocked"
             run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
+            # Fall through to the info event below before returning: on a block
+            # it is exactly the "how far did we get" line an operator needs, and
+            # the dashboard is this project's only monitoring channel.
+            _log_event(
+                session, run, "info",
+                f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
+            )
             session.commit()
             return total_sold + sold
 
