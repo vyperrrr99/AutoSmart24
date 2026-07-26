@@ -8,7 +8,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from autosmart24.config import BrandConfig
-from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
+from autosmart24.db.dealers import upsert_dealer
+from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.scraping.change_detection import diff_sweep
 from autosmart24.scraping.concurrency import run_worker_pool
 from autosmart24.scraping.crawler import crawl_brand
@@ -113,6 +114,24 @@ def process_detail_backlog(
                 row.price_evaluation_category = detail["price_evaluation_category"]
                 row.price_evaluation_median = detail["price_evaluation_median"]
                 row.created_at_source = detail["created_at_source"]
+                row.had_accident = detail["had_accident"]
+                row.has_full_service_history = detail["has_full_service_history"]
+                row.gears = detail["gears"]
+                row.drive_train = detail["drive_train"]
+                row.cylinders = detail["cylinders"]
+                row.weight_kg = detail["weight_kg"]
+                row.co2_emissions_g_km = detail["co2_emissions_g_km"]
+                row.fuel_consumption_combined = detail["fuel_consumption_combined"]
+                row.fuel_consumption_urban = detail["fuel_consumption_urban"]
+                row.fuel_consumption_extra_urban = detail["fuel_consumption_extra_urban"]
+                row.emission_class = detail["emission_class"]
+                row.upholstery = detail["upholstery"]
+                row.upholstery_color = detail["upholstery_color"]
+                row.is_conditional_price = detail["is_conditional_price"]
+                row.interaction_count = detail["interaction_count"]
+                row.favorites_count = detail["favorites_count"]
+                row.new_driver_suitable = detail["new_driver_suitable"]
+                row.dealer_id = upsert_dealer(session, detail["dealer"], now)
                 row.raw_detail = detail["raw_detail"]
                 row.detail_scraped = True
                 enriched += 1

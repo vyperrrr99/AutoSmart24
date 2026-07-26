@@ -7,7 +7,7 @@ import respx
 from sqlalchemy.orm import sessionmaker
 
 from autosmart24.config import BrandConfig
-from autosmart24.db.models import Listing, PriceHistory, ScrapeEvent, ScrapeRun
+from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
@@ -93,6 +93,12 @@ def _fake_detail_data(listing_id: str) -> dict:
         "num_previous_owners": None, "province": None, "latitude": None, "longitude": None,
         "vat_exposed": None, "price_evaluation_category": None, "price_evaluation_median": None,
         "created_at_source": None, "raw_detail": {"id": listing_id},
+        "had_accident": None, "has_full_service_history": None, "gears": None, "drive_train": None,
+        "cylinders": None, "weight_kg": None, "co2_emissions_g_km": None,
+        "fuel_consumption_combined": None, "fuel_consumption_urban": None, "fuel_consumption_extra_urban": None,
+        "emission_class": None, "upholstery": None, "upholstery_color": None,
+        "is_conditional_price": None, "interaction_count": None, "favorites_count": None,
+        "new_driver_suitable": None, "dealer": None,
     }
 
 
@@ -231,6 +237,12 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
                 "num_previous_owners": None, "province": "TO", "latitude": 44.8, "longitude": 7.3,
                 "vat_exposed": False, "price_evaluation_category": 1, "price_evaluation_median": 16100,
                 "created_at_source": dt.datetime.utcnow(), "raw_detail": {"id": "pending-1"},
+                "had_accident": None, "has_full_service_history": None, "gears": 6, "drive_train": "Anteriore",
+                "cylinders": 3, "weight_kg": 1159, "co2_emissions_g_km": None,
+                "fuel_consumption_combined": None, "fuel_consumption_urban": None, "fuel_consumption_extra_urban": None,
+                "emission_class": "Euro 6d", "upholstery": "Altro", "upholstery_color": None,
+                "is_conditional_price": True, "interaction_count": 500, "favorites_count": 20,
+                "new_driver_suitable": True, "dealer": None,
             },
         )
 
@@ -877,3 +889,68 @@ def test_run_brand_sweep_skips_detail_backlog_when_already_blocked(db_session):
     assert fetch_calls == ["https://www.autoscout24.it/annunci/missing-blocked-1"]
     events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
     assert not any(e.level == "info" and e.message.startswith("Detail backlog page:") for e in events)
+
+
+def test_process_detail_backlog_persists_new_structured_fields(db_session):
+    db_session.add(_existing_listing("detail-fields-1", 10000, detail_scraped=False))
+    db_session.commit()
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+
+    def fake_fetch_detail(client, url):
+        data = _fake_detail_data("detail-fields-1")
+        data.update({
+            "had_accident": False, "has_full_service_history": True, "gears": 6,
+            "drive_train": "Anteriore", "cylinders": 3, "weight_kg": 1159,
+            "co2_emissions_g_km": 109.0, "fuel_consumption_combined": 5.4,
+            "emission_class": "Euro 6d", "upholstery": "Altro", "upholstery_color": "Nero",
+            "is_conditional_price": True, "interaction_count": 10670, "favorites_count": 193,
+            "new_driver_suitable": True, "dealer": None,
+        })
+        return DetailResult(sold=False, data=data)
+
+    process_detail_backlog(db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail)
+
+    listing = db_session.get(Listing, "detail-fields-1")
+    assert listing.had_accident is False
+    assert listing.has_full_service_history is True
+    assert listing.gears == 6
+    assert listing.drive_train == "Anteriore"
+    assert listing.cylinders == 3
+    assert listing.weight_kg == 1159
+    assert listing.co2_emissions_g_km == 109.0
+    assert listing.fuel_consumption_combined == 5.4
+    assert listing.emission_class == "Euro 6d"
+    assert listing.upholstery == "Altro"
+    assert listing.upholstery_color == "Nero"
+    assert listing.is_conditional_price is True
+    assert listing.interaction_count == 10670
+    assert listing.favorites_count == 193
+    assert listing.new_driver_suitable is True
+    assert listing.dealer_id is None
+
+
+def test_process_detail_backlog_upserts_dealer_and_links_listing(db_session):
+    db_session.add(_existing_listing("detail-dealer-1", 10000, detail_scraped=False))
+    db_session.commit()
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+
+    def fake_fetch_detail(client, url):
+        data = _fake_detail_data("detail-dealer-1")
+        data["dealer"] = {
+            "id": 555, "company_name": "Test Dealer Srl",
+            "ratings_stars": 4.5, "ratings_count": 20, "recommend_percentage": 85,
+        }
+        return DetailResult(sold=False, data=data)
+
+    process_detail_backlog(db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail)
+
+    listing = db_session.get(Listing, "detail-dealer-1")
+    assert listing.dealer_id == 555
+    dealer = db_session.get(Dealer, 555)
+    assert dealer is not None
+    assert dealer.company_name == "Test Dealer Srl"
+    assert dealer.ratings_stars == 4.5
