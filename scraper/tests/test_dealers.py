@@ -38,3 +38,25 @@ def test_upsert_dealer_updates_an_existing_row_not_duplicate(db_session):
     assert rows[0].company_name == "New Name"
     assert rows[0].ratings_count == 12
     assert rows[0].synced_at == now2
+
+
+def test_upsert_dealer_handles_two_new_listings_from_the_same_dealer_in_one_uncommitted_batch(db_session):
+    """Reproduces a real production crash: processing multiple listings from the
+    SAME dealer within one un-committed batch (e.g. one page of the detail
+    backlog, or one run of the backfill script) must not create two pending
+    Dealer objects with the same primary key. This project's session factory
+    sets autoflush=False, so a naive get-or-create that never flushes will
+    silently pass in isolation but crash with a UniqueViolation at commit time
+    once a dealer has more than one listing in the same batch -- which is the
+    normal case for any real dealer, not an edge case."""
+    now = dt.datetime.utcnow()
+    dealer_info = {"id": 777, "company_name": "Busy Dealer Srl", "ratings_stars": 4.5, "ratings_count": 50, "recommend_percentage": 90}
+
+    first_id = upsert_dealer(db_session, dealer_info, now)
+    second_id = upsert_dealer(db_session, dealer_info, now)  # same dealer, still within the same uncommitted transaction
+    db_session.commit()  # must not raise IntegrityError
+
+    assert first_id == 777
+    assert second_id == 777
+    rows = db_session.query(Dealer).filter_by(id=777).all()
+    assert len(rows) == 1

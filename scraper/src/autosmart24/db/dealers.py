@@ -14,6 +14,7 @@ def upsert_dealer(session: Session, dealer_info: dict | None, now: dt.datetime) 
     if dealer is None:
         dealer = Dealer(id=dealer_info["id"], synced_at=now)
         session.add(dealer)
+        session.flush()
     dealer.company_name = dealer_info["company_name"]
     dealer.ratings_stars = dealer_info["ratings_stars"]
     dealer.ratings_count = dealer_info["ratings_count"]
