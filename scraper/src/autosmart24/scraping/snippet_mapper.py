@@ -54,5 +54,4 @@ def map_snippet_listing(raw: dict) -> dict:
         "city": location.get("city"),
         "zip_code": location.get("zip"),
         "price": price.get("priceRaw"),
-        "raw_snippet": raw,
     }

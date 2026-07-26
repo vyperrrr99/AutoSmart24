@@ -67,7 +67,6 @@ def _fake_snippet(listing_id: str, price: int) -> dict:
         "zip_code": "00100",
         "price": price,
         "url": f"https://www.autoscout24.it/annunci/{listing_id}",
-        "raw_snippet": {"id": listing_id},
     }
 
 
@@ -92,7 +91,7 @@ def _fake_detail_data(listing_id: str) -> dict:
         "body_type": None, "body_color": None, "num_seats": None, "num_doors": None,
         "num_previous_owners": None, "province": None, "latitude": None, "longitude": None,
         "vat_exposed": None, "price_evaluation_category": None, "price_evaluation_median": None,
-        "created_at_source": None, "raw_detail": {"id": listing_id},
+        "created_at_source": None,
         "had_accident": None, "has_full_service_history": None, "gears": None, "drive_train": None,
         "cylinders": None, "weight_kg": None, "co2_emissions_g_km": None,
         "fuel_consumption_combined": None, "fuel_consumption_urban": None, "fuel_consumption_extra_urban": None,
@@ -236,7 +235,7 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
                 "body_type": "Berlina", "body_color": None, "num_seats": 5, "num_doors": 5,
                 "num_previous_owners": None, "province": "TO", "latitude": 44.8, "longitude": 7.3,
                 "vat_exposed": False, "price_evaluation_category": 1, "price_evaluation_median": 16100,
-                "created_at_source": dt.datetime.utcnow(), "raw_detail": {"id": "pending-1"},
+                "created_at_source": dt.datetime.utcnow(),
                 "had_accident": None, "has_full_service_history": None, "gears": 6, "drive_train": "Anteriore",
                 "cylinders": 3, "weight_kg": 1159, "co2_emissions_g_km": None,
                 "fuel_consumption_combined": None, "fuel_consumption_urban": None, "fuel_consumption_extra_urban": None,

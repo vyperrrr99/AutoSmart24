@@ -103,5 +103,4 @@ def map_detail_listing(ld: dict) -> dict:
         "source_status": ld.get("status"),
         "created_at_source": _parse_created_at(ld.get("createdTimestampWithOffset")),
         "dealer": extract_dealer(ld),
-        "raw_detail": ld,
     }

@@ -1,3 +1,7 @@
+# HISTORICAL: this script populated the detail-fields/dealers schema added in
+# migration 0005 from the raw_detail JSON that existed at the time. It cannot
+# run anymore after migration 0006 dropped that column -- kept only as a
+# record of how the one-time backfill was performed.
 from __future__ import annotations
 
 import datetime as dt

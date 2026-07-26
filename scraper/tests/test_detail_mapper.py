@@ -31,7 +31,6 @@ def test_map_detail_listing_extracts_full_fields():
     assert mapped["first_registration"].isoformat() == "2026-04-01"
     assert mapped["created_at_source"].year == 2026
     assert mapped["url"].startswith("https://www.autoscout24.it/annunci/")
-    assert mapped["raw_detail"] == ld
 
 
 def test_map_detail_listing_handles_missing_city_gracefully():

@@ -28,7 +28,6 @@ def test_map_snippet_listing_extracts_core_fields():
         "fiat-grande-panda-benzina-icon-cambio-manuale-promo-flex-benzina-cat_ma28mo76901-"
         "b73b0c64-3c16-4215-b927-02a5fe324ee7"
     )
-    assert mapped["raw_snippet"] == raw
 
 
 def test_map_snippet_listing_handles_missing_tracking_gracefully():

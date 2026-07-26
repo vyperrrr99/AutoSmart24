@@ -97,9 +97,6 @@ class Listing(Base):
 
     detail_scraped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    raw_snippet: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
-    raw_detail: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
-
 
 class PriceHistory(Base):
     __tablename__ = "price_history"

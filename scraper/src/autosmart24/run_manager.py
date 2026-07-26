@@ -132,7 +132,6 @@ def process_detail_backlog(
                 row.favorites_count = detail["favorites_count"]
                 row.new_driver_suitable = detail["new_driver_suitable"]
                 row.dealer_id = upsert_dealer(session, detail["dealer"], now)
-                row.raw_detail = detail["raw_detail"]
                 row.detail_scraped = True
                 enriched += 1
         except BlockedError as exc:
@@ -266,7 +265,6 @@ def run_brand_sweep(
                         row.city = snippet["city"]
                         row.zip_code = snippet["zip_code"]
                         row.url = snippet["url"]
-                        row.raw_snippet = snippet["raw_snippet"]
                         row.last_seen_at = now
                         row.last_checked_at = now
                         relisted_ids.add(listing_id)
@@ -296,7 +294,6 @@ def run_brand_sweep(
                             last_checked_at=now,
                             status="active",
                             detail_scraped=False,
-                            raw_snippet=snippet["raw_snippet"],
                         )
                     )
                     session.add(PriceHistory(listing_id=listing_id, price=snippet["price"], recorded_at=now))
