@@ -15,6 +15,17 @@ class Base(DeclarativeBase):
 JSONVariant = JSONB().with_variant(JSON(), "sqlite")
 
 
+class Dealer(Base):
+    __tablename__ = "dealers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ratings_stars: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ratings_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recommend_percentage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
 class Listing(Base):
     __tablename__ = "listings"
 
@@ -40,6 +51,25 @@ class Listing(Base):
     num_seats: Mapped[int | None] = mapped_column(Integer, nullable=True)
     num_doors: Mapped[int | None] = mapped_column(Integer, nullable=True)
     num_previous_owners: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    had_accident: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_full_service_history: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    gears: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drive_train: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cylinders: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    co2_emissions_g_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fuel_consumption_combined: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fuel_consumption_urban: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fuel_consumption_extra_urban: Mapped[float | None] = mapped_column(Float, nullable=True)
+    emission_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    upholstery: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    upholstery_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_conditional_price: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    interaction_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    favorites_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_driver_suitable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    dealer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("dealers.id"), nullable=True)
 
     seller_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     seller_company_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
