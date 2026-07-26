@@ -509,7 +509,7 @@ Note `"raw_detail": ld` is deliberately still present here — Task 6 removes it
 - [ ] **Step 5: Run to confirm pass**
 
 Run: `cd scraper && pytest tests/test_detail_mapper.py -v`
-Expected: `13 passed` (3 pre-existing + 10 new).
+Expected: `10 passed` (3 pre-existing + 7 new).
 
 - [ ] **Step 6: Commit**
 
