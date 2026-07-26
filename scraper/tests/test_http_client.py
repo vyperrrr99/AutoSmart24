@@ -104,6 +104,26 @@ def test_get_retries_transient_timeout_then_succeeds():
 
 
 @respx.mock
+def test_get_retries_remote_protocol_error_then_succeeds():
+    """Second real production incident of this class: a Peugeot sweep died
+    on httpx.RemoteProtocolError ("Server disconnected without sending a
+    response") after the original ReadTimeout-only retry didn't cover it --
+    RemoteProtocolError is a sibling of TimeoutException/NetworkError under
+    the common httpx.TransportError parent, not a subclass of either."""
+    route = respx.get("https://example.test/flaky-remote")
+    route.side_effect = [
+        httpx.RemoteProtocolError("Server disconnected without sending a response"),
+        httpx.Response(200, text="ok"),
+    ]
+
+    response = _instant_client().get("https://example.test/flaky-remote")
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+    assert route.call_count == 2
+
+
+@respx.mock
 def test_get_exhausts_retries_and_raises_original_timeout():
     route = respx.get("https://example.test/always-flaky")
     route.side_effect = httpx.ReadTimeout("timed out")

@@ -57,7 +57,7 @@ class RateLimitedClient:
             self.sleep_fn(delay)
             try:
                 response = self.client.get(url)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except httpx.TransportError as exc:
                 if attempt >= attempts:
                     raise
                 logger.warning(
