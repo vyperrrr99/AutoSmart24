@@ -17,12 +17,35 @@ def _parse_created_at(value: str | None) -> dt.datetime | None:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _parse_weight_kg(value: str | None) -> int | None:
+    if not value:
+        return None
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return int(digits) if digits else None
+
+
+def extract_dealer(ld: dict) -> dict | None:
+    seller = ld.get("seller") or {}
+    if not seller.get("isDealer") or seller.get("id") is None:
+        return None
+    ratings = ld.get("ratings") or {}
+    return {
+        "id": seller["id"],
+        "company_name": seller.get("companyName"),
+        "ratings_stars": ratings.get("ratingsStars"),
+        "ratings_count": ratings.get("ratingsCount"),
+        "recommend_percentage": ratings.get("recommendPercentage"),
+    }
+
+
 def map_detail_listing(ld: dict) -> dict:
     vehicle = ld.get("vehicle") or {}
     location = ld.get("location") or {}
     seller = ld.get("seller") or {}
     identifier = ld.get("identifier") or {}
     prices_public = (ld.get("prices") or {}).get("public") or {}
+    top_price = ld.get("price") or {}
+    dpv_statistics = ld.get("dpvStatistics") or {}
 
     city, province = _parse_city(location.get("city"))
     first_registration_raw = vehicle.get("firstRegistrationDateRaw")
@@ -48,6 +71,20 @@ def map_detail_listing(ld: dict) -> dict:
         "num_seats": vehicle.get("numberOfSeats"),
         "num_doors": vehicle.get("numberOfDoors"),
         "num_previous_owners": vehicle.get("noOfPreviousOwners"),
+        "had_accident": vehicle.get("hadAccident"),
+        "has_full_service_history": vehicle.get("hasFullServiceHistory"),
+        "gears": vehicle.get("gears"),
+        "drive_train": vehicle.get("driveTrain"),
+        "cylinders": vehicle.get("cylinders"),
+        "weight_kg": _parse_weight_kg(vehicle.get("weight")),
+        "co2_emissions_g_km": (vehicle.get("co2emissionInGramPerKmWithFallback") or {}).get("raw"),
+        "fuel_consumption_combined": (vehicle.get("fuelConsumptionCombined") or {}).get("raw"),
+        "fuel_consumption_urban": (vehicle.get("fuelConsumptionUrban") or {}).get("raw"),
+        "fuel_consumption_extra_urban": (vehicle.get("fuelConsumptionExtraUrban") or {}).get("raw"),
+        "emission_class": (vehicle.get("environmentEuDirective") or {}).get("formatted"),
+        "upholstery": vehicle.get("upholstery"),
+        "upholstery_color": vehicle.get("upholsteryColor"),
+        "new_driver_suitable": vehicle.get("newDriverSuitable"),
         "seller_type": seller.get("type"),
         "seller_company_name": seller.get("companyName"),
         "city": city,
@@ -59,8 +96,12 @@ def map_detail_listing(ld: dict) -> dict:
         "vat_exposed": prices_public.get("taxDeductible"),
         "price_evaluation_category": prices_public.get("category"),
         "price_evaluation_median": prices_public.get("median"),
+        "is_conditional_price": top_price.get("isConditionalPrice"),
+        "interaction_count": dpv_statistics.get("interaction"),
+        "favorites_count": dpv_statistics.get("favorites"),
         "url": ld.get("webPage"),
         "source_status": ld.get("status"),
         "created_at_source": _parse_created_at(ld.get("createdTimestampWithOffset")),
+        "dealer": extract_dealer(ld),
         "raw_detail": ld,
     }

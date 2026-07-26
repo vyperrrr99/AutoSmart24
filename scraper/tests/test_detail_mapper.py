@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from autosmart24.scraping.next_data import extract_next_data
-from autosmart24.scraping.detail_mapper import map_detail_listing
+from autosmart24.scraping.detail_mapper import extract_dealer, map_detail_listing, _parse_weight_kg
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -52,6 +52,7 @@ def test_map_detail_listing_handles_missing_city_gracefully():
     assert mapped["city"] is None
     assert mapped["province"] is None
     assert mapped["created_at_source"] is None
+    assert mapped["dealer"] is None
 
 
 def test_map_detail_listing_keeps_full_province_name_when_no_short_sigla_segment():
@@ -78,3 +79,91 @@ def test_map_detail_listing_keeps_full_province_name_when_no_short_sigla_segment
 
     assert mapped["province"] == "Campobasso"
     assert len(mapped["province"]) > 8
+
+
+def test_map_detail_listing_extracts_new_structured_fields():
+    ld = _listing_details()
+    mapped = map_detail_listing(ld)
+
+    assert mapped["had_accident"] is False
+    assert mapped["has_full_service_history"] is False
+    assert mapped["gears"] == 6
+    assert mapped["drive_train"] == "Anteriore"
+    assert mapped["cylinders"] == 3
+    assert mapped["weight_kg"] == 1159
+    assert mapped["co2_emissions_g_km"] is None
+    assert mapped["fuel_consumption_combined"] is None
+    assert mapped["fuel_consumption_urban"] is None
+    assert mapped["fuel_consumption_extra_urban"] is None
+    assert mapped["emission_class"] == "Euro 6d"
+    assert mapped["upholstery"] == "Altro"
+    assert mapped["upholstery_color"] is None
+    assert mapped["is_conditional_price"] is True
+    assert mapped["interaction_count"] == 10670
+    assert mapped["favorites_count"] == 193
+    assert mapped["new_driver_suitable"] is True
+
+
+def test_map_detail_listing_extracts_dealer_info_for_a_dealer_seller():
+    ld = _listing_details()
+    mapped = map_detail_listing(ld)
+
+    assert mapped["dealer"] == {
+        "id": 46936034,
+        "company_name": "Puntocar di Tarantino Andrea - Bricherasio",
+        "ratings_stars": 5,
+        "ratings_count": 25,
+        "recommend_percentage": 92,
+    }
+
+
+def test_map_detail_listing_dealer_is_none_for_missing_seller_info():
+    ld = {
+        "id": "zzz",
+        "identifier": {},
+        "vehicle": {},
+        "location": {},
+        "seller": {},
+        "prices": {},
+        "price": {},
+        "webPage": "https://www.autoscout24.it/annunci/zzz",
+        "status": "Active",
+        "createdTimestampWithOffset": None,
+    }
+    mapped = map_detail_listing(ld)
+
+    assert mapped["dealer"] is None
+    assert mapped["had_accident"] is None
+    assert mapped["gears"] is None
+    assert mapped["is_conditional_price"] is None
+
+
+def test_extract_dealer_returns_none_for_private_seller():
+    ld = {"seller": {"type": "Private", "isDealer": False}}
+    assert extract_dealer(ld) is None
+
+
+def test_extract_dealer_returns_none_when_dealer_has_no_id():
+    ld = {"seller": {"isDealer": True}}
+    assert extract_dealer(ld) is None
+
+
+def test_extract_dealer_extracts_ratings_for_a_real_dealer():
+    ld = {
+        "seller": {"id": 999, "isDealer": True, "companyName": "Auto Test Srl"},
+        "ratings": {"ratingsStars": 4.5, "ratingsCount": 30, "recommendPercentage": 88},
+    }
+    assert extract_dealer(ld) == {
+        "id": 999,
+        "company_name": "Auto Test Srl",
+        "ratings_stars": 4.5,
+        "ratings_count": 30,
+        "recommend_percentage": 88,
+    }
+
+
+def test_parse_weight_kg_handles_thousands_separator_and_none():
+    assert _parse_weight_kg("1.159 kg") == 1159
+    assert _parse_weight_kg("800 kg") == 800
+    assert _parse_weight_kg(None) is None
+    assert _parse_weight_kg("") is None
