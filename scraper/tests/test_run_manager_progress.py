@@ -3,7 +3,7 @@ import datetime as dt
 from sqlalchemy.orm import sessionmaker
 
 from autosmart24.config import BrandConfig
-from autosmart24.db.models import ScrapeRun
+from autosmart24.db.models import Listing, ScrapeRun
 from autosmart24.run_manager import run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
 from autosmart24.scraping.http_client import RateLimitedClient
@@ -75,3 +75,62 @@ def test_run_records_search_phase_progress_before_the_crawl_ends(db_session):
     assert observed["phase"] == "search"
     assert observed["listings_seen"] == 2
     assert observed["new_listings"] == 2
+
+
+def _pending_listing(listing_id: str) -> Listing:
+    now = dt.datetime(2026, 7, 27, 3, 0, 0)
+    return Listing(
+        id=listing_id, brand="Fiat", url=f"https://www.autoscout24.it/annunci/{listing_id}",
+        first_seen_at=now, last_seen_at=now, last_checked_at=now,
+        status="active", detail_scraped=False, price=1000,
+        first_registration=dt.date(2020, 1, 1),
+    )
+
+
+def test_run_switches_to_detail_phase_and_counts_enriched(db_session):
+    db_session.add(_pending_listing("d-1"))
+    db_session.add(_pending_listing("d-2"))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _snippet("d-1", 1000)
+        yield _snippet("d-2", 1000)
+
+    def fake_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail,
+    )
+
+    assert run.status == "success"
+    assert run.search_finished_at is not None
+    assert run.search_finished_at >= run.started_at
+    assert run.detail_total == 2
+    assert run.detail_enriched == 2
+    # phase is cleared once the run is over, so the UI stops showing a bar
+    assert run.phase is None
+
+
+def test_run_marks_detail_phase_while_backlog_is_being_processed(db_session):
+    db_session.add(_pending_listing("d-1"))
+    db_session.commit()
+    observed = {}
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _snippet("d-1", 1000)
+
+    def fake_detail(client, url):
+        other = sessionmaker(bind=db_session.bind)()
+        try:
+            row = other.query(ScrapeRun).one()
+            observed["phase"] = row.phase
+            observed["detail_total"] = row.detail_total
+        finally:
+            other.close()
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    assert observed["phase"] == "detail"
+    assert observed["detail_total"] == 1

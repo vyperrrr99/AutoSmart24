@@ -4,7 +4,7 @@ import datetime as dt
 import itertools
 from typing import Callable, Iterable, Iterator
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from autosmart24.config import BrandConfig
@@ -48,6 +48,24 @@ def process_detail_backlog(
     # forever. Without this, one permanently-failing detail page becomes an
     # infinite loop hammering the site.
     failed_ids: set[str] = set()
+
+    # Denominator for the dashboard's progress bar, counted once before the
+    # first page: the same filters the paging query below uses.
+    total_stmt = select(func.count()).select_from(Listing).where(
+        Listing.brand == brand.display_name,
+        Listing.status == "active",
+        Listing.detail_scraped.is_(False),
+        Listing.id.notin_(set(exclude_ids)),
+    )
+    if year_from is not None:
+        total_stmt = total_stmt.where(
+            or_(
+                Listing.first_registration.is_(None),
+                Listing.first_registration >= dt.date(year_from, 1, 1),
+            )
+        )
+    run.detail_total = session.execute(total_stmt).scalar_one()
+    session.commit()
 
     while True:
         stmt = select(Listing).where(
@@ -141,6 +159,7 @@ def process_detail_backlog(
             # Fall through to the info event below before returning: on a block
             # it is exactly the "how far did we get" line an operator needs, and
             # the dashboard is this project's only monitoring channel.
+            run.detail_enriched = (run.detail_enriched or 0) + enriched
             _log_event(
                 session, run, "info",
                 f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
@@ -148,6 +167,7 @@ def process_detail_backlog(
             session.commit()
             return total_sold + sold
 
+        run.detail_enriched = (run.detail_enriched or 0) + enriched
         _log_event(
             session, run, "info",
             f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
@@ -329,6 +349,7 @@ def run_brand_sweep(
                 session.commit()
         except BlockedError as exc:
             run.status = "blocked"
+            run.phase = None
             run.finished_at = _now()
             _log_event(session, run, "blocked", str(exc), url=exc.url)
             session.commit()
@@ -362,11 +383,15 @@ def run_brand_sweep(
                     )
         except BlockedError as exc:
             run.status = "blocked"
+            run.phase = None
             run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
 
         backlog_sold_count = 0
         if run.status != "blocked":
+            run.phase = "detail"
+            run.search_finished_at = _now()
+            session.commit()
             backlog_sold_count = process_detail_backlog(
                 session, client_factory, brand, run,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
@@ -379,6 +404,7 @@ def run_brand_sweep(
         run.sold_detected = sold_count + backlog_sold_count
         if run.status != "blocked":
             run.status = "success"
+        run.phase = None
         run.finished_at = _now()
 
         session.commit()
@@ -396,6 +422,7 @@ def run_brand_sweep(
         # then re-raise so the error still surfaces in application logs.
         session.rollback()
         run.status = "error"
+        run.phase = None
         run.finished_at = _now()
         # Counters are not reassigned here: every batch already persisted them
         # in its own commit, so after the rollback the row holds exactly what
