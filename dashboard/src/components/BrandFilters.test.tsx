@@ -47,6 +47,27 @@ describe("filterBrands", () => {
   it("returns everything with no filters", () => {
     expect(filterBrands(brands, "", "all")).toHaveLength(4);
   });
+
+  it("includes blocked runs when filtering for error status", () => {
+    const brandsWithBlocked = [
+      brand("audi", { last_run: run("error") }),
+      brand("bmw", { last_run: run("blocked") }),
+    ];
+    expect(filterBrands(brandsWithBlocked, "", "error").map((b) => b.slug)).toEqual(["audi", "bmw"]);
+  });
+
+  it("combines query and status filters with AND logic", () => {
+    const result = filterBrands(brands, "toy", "paused");
+    expect(result.map((b) => b.slug)).toEqual(["toyota"]);
+  });
+
+  it("matches query against display name (brand field)", () => {
+    const testBrands = [
+      brand("opel", { brand: "OPEL GROUP" }),
+      brand("toyota"),
+    ];
+    expect(filterBrands(testBrands, "group", "all").map((b) => b.slug)).toEqual(["opel"]);
+  });
 });
 
 describe("BrandFilters", () => {
