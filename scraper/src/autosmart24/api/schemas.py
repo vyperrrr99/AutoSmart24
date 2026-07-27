@@ -18,6 +18,11 @@ class RunOut(BaseModel):
     price_changes: int
     sold_detected: int
     errors_count: int
+    phase: str | None = None
+    search_finished_at: dt.datetime | None = None
+    search_total: int | None = None
+    detail_total: int | None = None
+    detail_enriched: int = 0
 
 
 class EventOut(BaseModel):
@@ -72,3 +77,43 @@ class ApplyDefaultsRequest(BaseModel):
     schedule_day_of_week: str | None = None
     schedule_hour: int | None = Field(default=None, ge=0, le=23)
     schedule_minute: int | None = Field(default=None, ge=0, le=59)
+
+
+class QueueCurrentOut(BaseModel):
+    slug: str
+    brand: str
+    phase: str | None
+    done: int
+    total: int | None
+    percent: float | None
+    eta_seconds: int | None
+    eta_is_fallback: bool
+    started_at: dt.datetime
+
+
+class QueuePendingOut(BaseModel):
+    slug: str
+    brand: str
+    position: int
+    eta_seconds: int | None
+
+
+class QueueOut(BaseModel):
+    halted: bool
+    halted_reason: str | None
+    halted_at: dt.datetime | None
+    current: QueueCurrentOut | None
+    pending: list[QueuePendingOut]
+    total_eta_seconds: int | None
+
+
+class RunMetricsOut(BaseModel):
+    run_id: int
+    started_at: dt.datetime
+    status: str
+    search_seconds: int | None
+    search_items: int | None
+    search_rate_per_min: float | None
+    detail_seconds: int | None
+    detail_items: int | None
+    detail_rate_per_min: float | None

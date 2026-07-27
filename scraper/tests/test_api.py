@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from autosmart24.api.main import create_app
 from autosmart24.db.models import BrandCatalog, ScrapeRun, TrackedBrand
+from autosmart24.queue_control import QueueController
 from autosmart24.scheduler import BrandScheduler
 from autosmart24.scraping.brand_catalog import CatalogEntry
 
@@ -43,6 +44,7 @@ def _app_with_session(db_session, run_now_fn=None, run_fn=None, refresh_catalog_
         run_now_fn=run_now_fn or (lambda brand: None),
         run_fn=run_fn or (lambda brand: None),
         refresh_catalog_fn=refresh_catalog_fn or (lambda: []),
+        queue_controller=QueueController(),
     )
     return app, scheduler
 

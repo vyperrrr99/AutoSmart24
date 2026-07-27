@@ -9,17 +9,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from autosmart24.api.progress import eta_seconds, percent, phase_progress, rates_from_history, run_metrics
 from autosmart24.api.schemas import (
     AddBrandsRequest,
     ApplyDefaultsRequest,
     BrandCatalogEntryOut,
     BrandStatusOut,
     EventOut,
+    QueueCurrentOut,
+    QueueOut,
+    QueuePendingOut,
+    RunMetricsOut,
     RunOut,
     UpdateBrandRequest,
 )
 from autosmart24.config import BrandConfig
 from autosmart24.db.models import BrandCatalog, ScrapeEvent, ScrapeRun, TrackedBrand
+from autosmart24.queue_control import QueueController
 from autosmart24.scheduler import BrandScheduler
 from autosmart24.scraping.brand_catalog import CatalogEntry
 
@@ -60,6 +66,7 @@ def create_app(
     run_now_fn: Callable[[BrandConfig], None],
     run_fn: Callable[[BrandConfig], None],
     refresh_catalog_fn: Callable[[], list[CatalogEntry]],
+    queue_controller: QueueController,
 ) -> FastAPI:
     app = FastAPI(title="AutoSmart24 Scraper API")
 
@@ -240,5 +247,87 @@ def create_app(
         row = _find_tracked_brand(session, brand_slug)
         run_now_fn(_to_brand_config(row))
         return {"triggered": True}
+
+    @app.get("/queue", response_model=QueueOut)
+    def get_queue(session: Session = Depends(get_session)):
+        state = queue_controller.state()
+        running = session.execute(
+            select(ScrapeRun).where(ScrapeRun.status == "running").order_by(ScrapeRun.started_at.desc()).limit(1)
+        ).scalar_one_or_none()
+
+        current = None
+        current_eta = None
+        if running is not None:
+            tracked = session.execute(
+                select(TrackedBrand).where(TrackedBrand.display_name == running.brand)
+            ).scalar_one_or_none()
+            history = session.execute(
+                select(ScrapeRun)
+                .where(ScrapeRun.brand == running.brand, ScrapeRun.finished_at.is_not(None))
+                .order_by(ScrapeRun.started_at.desc()).limit(5)
+            ).scalars().all()
+            search_rate, detail_rate, is_fallback = rates_from_history(list(history))
+            done, total = phase_progress(running)
+            current_eta = eta_seconds(running, search_rate, detail_rate)
+            current = QueueCurrentOut(
+                slug=tracked.slug if tracked else running.brand,
+                brand=running.brand,
+                phase=running.phase,
+                done=done,
+                total=total,
+                percent=percent(done, total),
+                eta_seconds=current_eta,
+                eta_is_fallback=is_fallback,
+                started_at=running.started_at,
+            )
+
+        # Pending = brands with a live, unpaused job, excluding the one running.
+        pending: list[QueuePendingOut] = []
+        rows = session.execute(select(TrackedBrand).order_by(TrackedBrand.slug)).scalars().all()
+        position = 0
+        total_eta = current_eta or 0
+        for row in rows:
+            if row.paused or (running is not None and row.display_name == running.brand):
+                continue
+            position += 1
+            history = session.execute(
+                select(ScrapeRun)
+                .where(ScrapeRun.brand == row.display_name, ScrapeRun.finished_at.is_not(None))
+                .order_by(ScrapeRun.started_at.desc()).limit(5)
+            ).scalars().all()
+            last = history[0] if history else None
+            brand_eta = None
+            if last is not None:
+                search_rate, detail_rate, _ = rates_from_history(list(history))
+                brand_eta = int(
+                    (last.listings_seen or 0) * 60.0 / max(search_rate, 1.0)
+                    + (last.detail_enriched or 0) * 60.0 / max(detail_rate, 1.0)
+                )
+                total_eta += brand_eta
+            pending.append(
+                QueuePendingOut(slug=row.slug, brand=row.display_name, position=position, eta_seconds=brand_eta)
+            )
+
+        return QueueOut(
+            halted=state.halted,
+            halted_reason=state.reason,
+            halted_at=state.halted_at,
+            current=current,
+            pending=pending,
+            total_eta_seconds=total_eta or None,
+        )
+
+    @app.post("/queue/resume")
+    def resume_queue():
+        queue_controller.resume()
+        return {"halted": False}
+
+    @app.get("/brands/{brand_slug}/metrics", response_model=list[RunMetricsOut])
+    def brand_metrics(brand_slug: str, session: Session = Depends(get_session)):
+        brand = _find_tracked_brand(session, brand_slug)
+        rows = session.execute(
+            select(ScrapeRun).where(ScrapeRun.brand == brand.display_name).order_by(ScrapeRun.started_at.desc())
+        ).scalars().all()
+        return [RunMetricsOut(**m) for row in rows if (m := run_metrics(row)) is not None]
 
     return app

@@ -132,6 +132,7 @@ app = create_app(
     run_now_fn=_run_now_fn,
     run_fn=_run_fn,
     refresh_catalog_fn=_refresh_catalog_fn,
+    queue_controller=queue_controller,
 )
 
 
