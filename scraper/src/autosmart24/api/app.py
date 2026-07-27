@@ -11,6 +11,7 @@ from autosmart24.api.main import create_app
 from autosmart24.config import BrandConfig, MVP_BRANDS
 from autosmart24.db.models import BrandCatalog, ScrapeEvent, TrackedBrand
 from autosmart24.db.session import make_engine, make_session_factory
+from autosmart24.queue_control import QueueController
 from autosmart24.run_manager import run_brand_sweep
 from autosmart24.scheduler import BrandRunGuard, BrandScheduler
 from autosmart24.scraping.brand_catalog import fetch_brand_catalog
@@ -66,9 +67,29 @@ def _client_factory():
 
 scheduler = BrandScheduler()
 run_guard = BrandRunGuard()
+queue_controller = QueueController()
 
 
 def _run_fn(brand: BrandConfig) -> None:
+    if queue_controller.is_halted():
+        # Exit before opening a client: with the queue halted after a block,
+        # every request we skip is one that would deepen the block.
+        state = queue_controller.state()
+        logger.warning("Skipping sweep for brand %s: queue halted (%s)", brand.slug, state.reason)
+        session = session_factory()
+        try:
+            session.add(
+                ScrapeEvent(
+                    run_id=None, brand=brand.display_name, level="warning",
+                    message=f"Run saltata: coda ferma ({state.reason})",
+                    url=None, created_at=dt.datetime.utcnow(),
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+        return
+
     if not run_guard.try_acquire(brand.slug):
         logger.warning("Skipping sweep for brand %s: a sweep is already in progress", brand.slug)
         return
@@ -81,10 +102,12 @@ def _run_fn(brand: BrandConfig) -> None:
             year_from = None
             if tracked is not None and tracked.year_from_years is not None:
                 year_from = dt.date.today().year - tracked.year_from_years
-            run_brand_sweep(
+            run = run_brand_sweep(
                 session, _client_factory, brand,
                 concurrency=CONCURRENCY, year_from=year_from, session_refresh_requests=SESSION_REFRESH_REQUESTS,
             )
+            if run is not None and run.status == "blocked":
+                queue_controller.halt(f"blocco rilevato su {brand.display_name}")
         finally:
             session.close()
     finally:

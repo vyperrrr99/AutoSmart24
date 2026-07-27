@@ -20,11 +20,14 @@ specifically to catch that regression again.
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib
 import sys
 
 import pytest
 from sqlalchemy import select
+
+from autosmart24.config import BrandConfig
 
 MODULE_NAME = "autosmart24.api.app"
 
@@ -249,3 +252,42 @@ def test_start_scheduler_does_not_create_duplicate_jobs(imported_app_module):
         assert len(module.scheduler.scheduler.get_jobs()) == row_count
     finally:
         module.scheduler.shutdown()
+
+
+# --- queue_controller wiring in _run_fn --------------------------------
+
+
+def test_run_fn_skips_work_when_the_queue_is_halted(monkeypatch, db_session):
+    """A halted queue must cost zero HTTP requests: that is the whole point
+    of halting after an IP block."""
+    import autosmart24.api.app as app_module
+
+    called = []
+    monkeypatch.setattr(app_module, "run_brand_sweep", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(app_module, "session_factory", lambda: db_session)
+    app_module.queue_controller.halt("blocco di prova")
+    try:
+        app_module._run_fn(BrandConfig(slug="fiat", make_id=28, display_name="Fiat"))
+    finally:
+        app_module.queue_controller.resume()
+
+    assert called == []
+
+
+def test_run_fn_halts_the_queue_when_a_sweep_reports_blocked(monkeypatch, db_session):
+    import autosmart24.api.app as app_module
+    from autosmart24.db.models import ScrapeRun
+
+    def fake_sweep(session, client_factory, brand, **kwargs):
+        return ScrapeRun(brand=brand.display_name, started_at=dt.datetime.utcnow(), status="blocked")
+
+    monkeypatch.setattr(app_module, "run_brand_sweep", fake_sweep)
+    monkeypatch.setattr(app_module, "session_factory", lambda: db_session)
+    app_module.queue_controller.resume()
+
+    app_module._run_fn(BrandConfig(slug="fiat", make_id=28, display_name="Fiat"))
+    try:
+        assert app_module.queue_controller.is_halted() is True
+        assert "Fiat" in app_module.queue_controller.state().reason
+    finally:
+        app_module.queue_controller.resume()
