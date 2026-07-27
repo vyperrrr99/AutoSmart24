@@ -1,3 +1,6 @@
+import threading
+import time
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from autosmart24.config import BrandConfig
@@ -107,3 +110,44 @@ def test_remove_brand_job_is_a_no_op_for_an_unknown_brand():
     scheduler = BrandScheduler(BackgroundScheduler())
 
     scheduler.remove_brand_job("does-not-exist")  # must not raise
+
+
+def test_default_scheduler_runs_one_job_at_a_time():
+    """With 25 brands sharing the 03:00 trigger, APScheduler's default pool
+    would run 10 concurrently -- around 60 parallel HTTP requests once each
+    run opens its own worker pool. The queue must be serial."""
+    scheduler = BrandScheduler()
+    concurrent = []
+    peak = []
+    lock = threading.Lock()
+    done = threading.Event()
+
+    def slow_job(brand):
+        with lock:
+            concurrent.append(1)
+            peak.append(len(concurrent))
+        time.sleep(0.2)
+        with lock:
+            concurrent.pop()
+            if len(peak) == 3:
+                done.set()
+
+    scheduler.scheduler.start()
+    try:
+        for i in range(3):
+            scheduler.scheduler.add_job(slow_job, id=f"brand-{i}", args=[None])
+        done.wait(timeout=10)
+    finally:
+        scheduler.shutdown()
+
+    assert max(peak) == 1
+
+
+def test_default_scheduler_tolerates_late_job_submission():
+    """A job waiting behind a long run must not be discarded: the default
+    misfire_grace_time of 1s would drop it."""
+    scheduler = BrandScheduler()
+
+    grace = scheduler.scheduler._job_defaults["misfire_grace_time"]
+
+    assert grace >= 3600

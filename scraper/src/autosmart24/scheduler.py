@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -36,7 +37,19 @@ class BrandRunGuard:
 
 class BrandScheduler:
     def __init__(self, scheduler: BackgroundScheduler | None = None):
-        self.scheduler = scheduler or BackgroundScheduler()
+        # APScheduler's default pool runs 10 jobs at once. With every brand
+        # sharing the 03:00 trigger that means up to 10 concurrent sweeps,
+        # each opening SCRAPE_CONCURRENCY workers of its own -- roughly 60
+        # parallel requests to autoscout24. One worker makes the queue
+        # serial, keeping outbound concurrency at exactly one sweep's worth.
+        #
+        # misfire_grace_time must be generous for the same reason: a brand
+        # queued behind a multi-hour sweep is submitted long after its
+        # trigger time, and the 1s default would silently drop it.
+        self.scheduler = scheduler or BackgroundScheduler(
+            executors={"default": ThreadPoolExecutor(max_workers=1)},
+            job_defaults={"misfire_grace_time": 3600, "max_instances": 1},
+        )
 
     def schedule_brand(
         self,
