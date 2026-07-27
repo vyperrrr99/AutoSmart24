@@ -187,3 +187,51 @@ powershell -ExecutionPolicy Bypass -File .\run-storiche.ps1 *>&1 | Tee-Object ru
 - **Docker Desktop deve restare in esecuzione**: se si chiude, il container si ferma. Disattiva la sospensione automatica del PC per la durata del lavoro.
 - **Il firewall di Windows** non c'entra qui: la connessione parte da questa macchina verso la primaria, quindi conta il firewall *della primaria* (verificato: nessuno attivo).
 - Valgono tutte le avvertenze della sezione **6. Cosa NON fare**: niente `docker compose` senza `-f docker-compose.worker.yml`, non riattivare le marche o il cron, non toccare le 13 marche della primaria.
+
+---
+
+## 10. Rientro dei dati (operazione una tantum)
+
+Questo setup a due macchine esiste **solo per accelerare la raccolta iniziale**. Finito il lavoro, i dati rientrano qui e la macchina Linux torna a gestire tutte e 25 le marche da sola; il worker viene spento.
+
+### 10.1 Sul secondo PC, a lavoro concluso
+
+```powershell
+docker compose -f docker-compose.worker.yml exec -T postgres pg_dump -U autosmart24 -Fc autosmart24 > worker.dump
+```
+
+Se il worker non ha un Postgres proprio (perché usava il database condiviso), non serve nulla: i dati sono già qui.
+
+Trasferisci `worker.dump` sulla macchina Linux (chiavetta, `scp`, cartella condivisa — è un file solo).
+
+### 10.2 Sulla macchina Linux
+
+```bash
+cd ~/AutoSmart24
+bash scripts/merge-from-worker.sh /percorso/worker.dump
+```
+
+Lo script, in ordine: rifiuta di partire se c'è uno scraping in corso, fa un backup di sicurezza di questo database, carica il dump in uno schema di appoggio, esegue il merge in **una sola transazione** e verifica l'integrità referenziale.
+
+### 10.3 Come funziona il merge, e perché è sicuro
+
+Si regge su una condizione: **le due macchine lavorano su marche disgiunte e questa macchina non tocca mai le dieci marche storiche**. Per quelle dieci, quindi, il worker è l'unica fonte di verità e le sue righe sostituiscono in blocco quelle locali. Non esiste il caso in cui entrambe le parti abbiano modificato la stessa riga e qualcuno debba decidere chi vince.
+
+- `listings`, `price_history`, `scrape_runs`, `scrape_events` delle dieci marche: sostituiti
+- Tutto il resto (le quindici marche di questa macchina): **non toccato**
+- `dealers`: fusi per ID AutoScout, tenendo la copia sincronizzata più di recente — un concessionario può vendere auto di marche assegnate a entrambe le macchine, quindi nessuna delle due è autorevole sulla riga
+- `price_history`, `scrape_runs` e `scrape_events` hanno ID seriali che collidono tra le due macchine: vengono reinseriti con ID nuovi e i riferimenti degli eventi alle run sono rimappati di conseguenza
+
+**Una guardia rifiuta il merge** se il dump non contiene annunci per tutte e dieci le marche: senza quel controllo, un dump troncato cancellerebbe dieci marche da qui invece di aggiornarle.
+
+Il tutto è verificato da `scripts/test-merge.sh`, che costruisce due database sintetici divergenti, esegue il merge e controlla che il lavoro di entrambe le parti sopravviva. Eseguibile in qualsiasi momento senza toccare i dati reali:
+
+```bash
+bash scripts/test-merge.sh
+```
+
+### 10.4 Dopo il merge
+
+1. **Spegni il worker** sul secondo PC: due scrittori senza coordinamento sullo stesso dataset non sono una configurazione sostenibile.
+2. Questa macchina torna a gestire tutte e 25 le marche.
+3. Per riprendere lo scraping notturno, riattiva le marche dalla dashboard — al momento sono tutte in pausa, quindi finché non lo fai non parte nulla.
