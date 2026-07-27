@@ -10,6 +10,8 @@ Non c'è alcun database locale e nessun merge da fare: questo worker scrive dire
 | Database | locale | quello della primaria, via LAN |
 | Marche | le 13 nuove | le 10 storiche |
 
+> **Se la seconda macchina è Windows**, salta ai comandi PowerShell nella sezione **9. Windows** in fondo: i passi sono gli stessi, cambia la sintassi.
+
 ## 1. Prerequisiti
 
 ```bash
@@ -109,3 +111,78 @@ Il carico è irrisorio (~0,2% CPU, 210 MB di RAM): lo scraper passa quasi tutto 
 - **Un blocco (`status=blocked`)**: la coda si ferma da sola e non tocca più il sito. Riprendi con `curl -X POST http://localhost:8001/queue/resume` — ma prima aspetta almeno un'ora e valuta di cambiare server VPN.
 - **Verificare l'avanzamento in qualsiasi momento**: `curl -s http://localhost:8001/queue`
 - **La dashboard della primaria** (http://192.168.1.121:5173) mostra anche il lavoro di questa macchina, perché il database è lo stesso.
+
+---
+
+## 9. Windows (PowerShell)
+
+Stessi passi della guida sopra, adattati. Serve **Docker Desktop** installato e avviato (`docker --version` deve rispondere). Non serve `sudo`.
+
+### 9.1 Verificare la VPN
+
+Sulla macchina primaria, annota il riferimento:
+
+```bash
+curl -s https://api.ipify.org
+```
+
+Poi qui, **con la VPN attiva**:
+
+```powershell
+curl.exe -s https://api.ipify.org                              # deve differire dal riferimento
+Test-NetConnection -ComputerName 192.168.1.121 -Port 5434      # cerca TcpTestSucceeded : True
+```
+
+Se `TcpTestSucceeded` è `False`, la VPN sta inghiottendo anche la rete locale. Surfshark per Windows ha il **Bypasser**: aggiungi `192.168.1.0/24` alle esclusioni e ripeti il test.
+
+### 9.2 Prendere il codice e avviare
+
+```powershell
+git clone https://github.com/vyperrrr99/AutoSmart24.git
+cd AutoSmart24
+$env:AS24_DB_HOST = "192.168.1.121"
+docker compose -f docker-compose.worker.yml up -d --build
+```
+
+Verifica che veda il database condiviso (deve elencare 25 marche):
+
+```powershell
+curl.exe -s http://localhost:8001/brands | Select-String -Pattern '"slug"' | Measure-Object -Line
+```
+
+### 9.3 Lanciare le 10 marche storiche
+
+Equivalente PowerShell dello script bash. Salvalo come `run-storiche.ps1`:
+
+```powershell
+$api = "http://localhost:8001"
+$brands = @("fiat","volkswagen","audi","bmw","mercedes-benz","peugeot","ford","jeep","citroen","renault")
+
+foreach ($b in $brands) {
+    Write-Host "AVVIO $b  $(Get-Date -Format HH:mm:ss)"
+    Invoke-RestMethod -Method Post -Uri "$api/brands/$b/run-now" | Out-Null
+    Start-Sleep -Seconds 10
+
+    do {
+        Start-Sleep -Seconds 300
+        $run = (Invoke-RestMethod -Uri "$api/brands/$b/runs")[0]
+        $q = Invoke-RestMethod -Uri "$api/queue"
+        if ($q.current) { Write-Host "   $b - $($q.current.phase) $($q.current.done)  $(Get-Date -Format HH:mm:ss)" }
+    } while ($run.status -eq "running")
+
+    Write-Host "FINE $b : $($run.status) seen=$($run.listings_seen) new=$($run.new_listings)"
+}
+Write-Host "10 marche storiche completate"
+```
+
+Avvialo in una finestra che resti aperta per ~21 ore:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-storiche.ps1 *>&1 | Tee-Object run-storiche.log
+```
+
+### 9.4 Note specifiche Windows
+
+- **Docker Desktop deve restare in esecuzione**: se si chiude, il container si ferma. Disattiva la sospensione automatica del PC per la durata del lavoro.
+- **Il firewall di Windows** non c'entra qui: la connessione parte da questa macchina verso la primaria, quindi conta il firewall *della primaria* (verificato: nessuno attivo).
+- Valgono tutte le avvertenze della sezione **6. Cosa NON fare**: niente `docker compose` senza `-f docker-compose.worker.yml`, non riattivare le marche o il cron, non toccare le 13 marche della primaria.
