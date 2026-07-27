@@ -177,7 +177,7 @@ def run_brand_sweep(
     year_from: int | None = None,
     session_refresh_requests: int = 30,
 ) -> ScrapeRun:
-    run = ScrapeRun(brand=brand.display_name, started_at=_now(), status="running")
+    run = ScrapeRun(brand=brand.display_name, started_at=_now(), status="running", phase="search")
     session.add(run)
     session.commit()
 
@@ -310,14 +310,6 @@ def run_brand_sweep(
                     row.last_seen_at = now
                     row.last_checked_at = now
 
-                session.commit()
-
-                # Only credit these counters once the batch is durably
-                # committed, so that if a later batch's commit ever fails
-                # with an unexpected error, the outer except Exception
-                # handler below reports counts that match what is actually
-                # persisted in the DB (not an in-memory count that includes
-                # a batch whose commit never succeeded).
                 seen_ids.update(batch_snippets.keys())
                 # relisted_ids are ids from diff.new_ids that were treated as
                 # UPDATEs to a pre-existing row above, not fresh inserts --
@@ -325,11 +317,18 @@ def run_brand_sweep(
                 new_ids.update(diff.new_ids - relisted_ids)
                 listings_seen += len(batch_snippets)
                 price_changes += len(diff.price_changed)
+
+                # Persist progress in the SAME commit as this batch's listing
+                # changes: the dashboard polls these fields mid-run, and
+                # committing them together means a failed commit rolls back
+                # both, so the row can never claim progress that was not
+                # durably written.
+                run.listings_seen = listings_seen
+                run.new_listings = len(new_ids)
+                run.price_changes = price_changes
+                session.commit()
         except BlockedError as exc:
             run.status = "blocked"
-            run.listings_seen = listings_seen
-            run.new_listings = len(new_ids)
-            run.price_changes = price_changes
             run.finished_at = _now()
             _log_event(session, run, "blocked", str(exc), url=exc.url)
             session.commit()
@@ -398,9 +397,9 @@ def run_brand_sweep(
         session.rollback()
         run.status = "error"
         run.finished_at = _now()
-        run.listings_seen = listings_seen
-        run.new_listings = len(new_ids)
-        run.price_changes = price_changes
+        # Counters are not reassigned here: every batch already persisted them
+        # in its own commit, so after the rollback the row holds exactly what
+        # was durably written.
         run.errors_count += 1
         message = f"Unexpected error during sweep: {exc}"
         if len(message) > 2048:
