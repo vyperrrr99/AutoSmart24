@@ -148,3 +148,24 @@ body {
 .run-progress-note {
   opacity: 0.7;
 }
+
+.queue-panel {
+  background: #111827;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.queue-panel-halted {
+  border: 1px solid #f87171;
+}
+
+.queue-panel-halted button {
+  margin-top: 0.5rem;
+}
+
+.queue-panel-pending {
+  opacity: 0.8;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
