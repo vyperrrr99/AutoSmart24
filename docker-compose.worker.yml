@@ -1,0 +1,29 @@
+# Worker-only stack for a SECOND machine.
+#
+# It runs the scraper against the PRIMARY machine's Postgres over the LAN —
+# there is no local database and no dashboard here, so nothing needs merging
+# afterwards. The product spec (§2.6) calls for exactly this: extra workers on
+# other PCs pointing at one central Postgres, coordinated through the database
+# rather than a broker.
+#
+# Usage:
+#   AS24_DB_HOST=192.168.1.121 sudo docker compose -f docker-compose.worker.yml up -d --build
+#
+# The API is published on 8001 here too, so this machine can be driven with the
+# same curl commands as the primary one.
+
+services:
+  app:
+    build: ./scraper
+    environment:
+      DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@${AS24_DB_HOST:?set AS24_DB_HOST to the primary machine's LAN IP}:5434/autosmart24
+      SCRAPE_MIN_DELAY_SECONDS: "3"
+      SCRAPE_MAX_DELAY_SECONDS: "8"
+      # This machine leaves through a different public IP (VPN), so its request
+      # budget is its own. Still start at 8 — the value validated on the primary
+      # — and only raise it after watching for blocks.
+      SCRAPE_CONCURRENCY: "8"
+      SCRAPE_MAX_LISTING_AGE_YEARS: "10"
+      SCRAPE_SESSION_REFRESH_REQUESTS: "30"
+    ports:
+      - "8001:8000"
