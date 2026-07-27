@@ -61,7 +61,15 @@ docker compose -f docker-compose.worker.yml cp autosmart24-seed.dump postgres:/t
 docker compose -f docker-compose.worker.yml exec -T postgres pg_restore -U autosmart24 -d autosmart24 --no-owner --no-privileges --clean --if-exists /tmp/seed.dump
 ```
 
-Qualche avviso su oggetti inesistenti durante il `--clean` è normale. Verifica l'esito:
+Qualche avviso su oggetti inesistenti durante il `--clean` è normale.
+
+**Poi chiudi le run rimaste aperte nel dump.** Lo snapshot è stato preso mentre la primaria stava scrapando, quindi contiene una run con `status='running'` che qui non proseguirà mai: senza questo passaggio il pannello coda mostrerebbe per sempre "In esecuzione" su una marca ferma, e la dashboard resterebbe a interrogare il server ogni 3 secondi.
+
+```powershell
+docker compose -f docker-compose.worker.yml exec -T postgres psql -U autosmart24 -d autosmart24 -c "UPDATE scrape_runs SET status='error', finished_at=now(), phase=NULL WHERE status='running';"
+```
+
+Verifica l'esito:
 
 ```powershell
 curl.exe -s http://localhost:8002/brands | Select-String -Pattern '"slug"' | Measure-Object -Line
