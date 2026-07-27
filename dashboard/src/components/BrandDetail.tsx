@@ -22,17 +22,24 @@ export function BrandDetail({ brandSlug, onClose, pollIntervalMs = DEFAULT_POLL_
     let cancelled = false;
 
     async function load() {
-      const [nextRuns, nextEvents, nextMetrics] = await Promise.all([
-        fetchBrandRuns(brandSlug),
-        fetchBrandEvents(brandSlug),
-        fetchBrandMetrics(brandSlug),
-      ]);
+      const [nextRuns, nextEvents] = await Promise.all([fetchBrandRuns(brandSlug), fetchBrandEvents(brandSlug)]);
       // The panel stays mounted across polls; drop late responses from a
       // previous brand so switching brands cannot show the wrong data.
       if (cancelled) return;
       setRuns(nextRuns);
       setEvents(nextEvents);
-      setMetrics(nextMetrics);
+
+      // Metrics are best-effort: a failing /metrics must not blank the runs
+      // and events already fetched above. BrandMetrics already renders
+      // nothing for an empty list.
+      try {
+        const nextMetrics = await fetchBrandMetrics(brandSlug);
+        if (cancelled) return;
+        setMetrics(nextMetrics);
+      } catch {
+        if (cancelled) return;
+        setMetrics([]);
+      }
     }
 
     load();

@@ -27,4 +27,19 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText(/In esecuzione: Opel/)).toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: /cerca marca/i })).toBeInTheDocument();
   });
+
+  it("still renders the brand grid when the queue endpoint fails", async () => {
+    vi.mocked(api.fetchBrands).mockResolvedValue([
+      {
+        make_id: 54, brand: "Opel", slug: "opel", paused: false, year_from_years: 10,
+        schedule_day_of_week: null, schedule_hour: 3, schedule_minute: 0, last_run: null,
+      },
+    ]);
+    vi.mocked(api.fetchQueue).mockRejectedValue(new Error("boom"));
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("Opel")).toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: /cerca marca/i })).toBeInTheDocument();
+  });
 });

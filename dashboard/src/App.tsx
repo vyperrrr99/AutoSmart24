@@ -19,9 +19,16 @@ export function App() {
   const [statusFilter, setStatusFilter] = useState<BrandStatusFilter>("all");
 
   async function reload() {
-    const [nextBrands, nextQueue] = await Promise.all([fetchBrands(), fetchQueue()]);
+    const nextBrands = await fetchBrands();
     setBrands(nextBrands);
-    setQueue(nextQueue);
+    // The queue endpoint is best-effort: if it fails, the brand grid must
+    // still render (degraded, not blank). QueuePanel already renders
+    // nothing for a null queue.
+    try {
+      setQueue(await fetchQueue());
+    } catch {
+      setQueue(null);
+    }
   }
 
   useEffect(() => {

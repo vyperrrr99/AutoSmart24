@@ -28,6 +28,21 @@ describe("BrandDetail", () => {
     await waitFor(() => expect(screen.getByText("Test event")).toBeInTheDocument());
   });
 
+  it("still renders runs and events when the metrics endpoint fails", async () => {
+    vi.mocked(api.fetchBrandRuns).mockResolvedValue([]);
+    vi.mocked(api.fetchBrandEvents).mockResolvedValue([
+      {
+        id: 1, run_id: 1, brand: "Fiat", level: "warning", message: "Test event",
+        url: null, created_at: "2026-07-24T10:00:00Z",
+      },
+    ]);
+    vi.mocked(api.fetchBrandMetrics).mockRejectedValue(new Error("boom"));
+
+    render(<BrandDetail brandSlug="fiat" onClose={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText("Test event")).toBeInTheDocument());
+  });
+
   it("refetches while the panel stays open", async () => {
     vi.mocked(api.fetchBrandRuns).mockResolvedValue([]);
     vi.mocked(api.fetchBrandEvents).mockResolvedValue([]);
