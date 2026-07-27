@@ -1,4 +1,4 @@
-import type { BrandBulkAddPatch, BrandCatalogEntryOut, BrandDefaultsPatch, BrandStatusOut, EventOut, RunOut } from "./types";
+import type { BrandBulkAddPatch, BrandCatalogEntryOut, BrandDefaultsPatch, BrandStatusOut, EventOut, RunOut, QueueOut, RunMetrics } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -101,4 +101,16 @@ export function applyDefaultsToAllBrands(patch: BrandDefaultsPatch): Promise<Bra
 
 export function removeBrand(brandSlug: string): Promise<{ deleted: boolean }> {
   return deleteJson(`/brands/${brandSlug}`);
+}
+
+export function fetchQueue(): Promise<QueueOut> {
+  return getJson<QueueOut>("/queue");
+}
+
+export function resumeQueue(): Promise<{ halted: boolean }> {
+  return postJson("/queue/resume");
+}
+
+export function fetchBrandMetrics(brandSlug: string): Promise<RunMetrics[]> {
+  return getJson<RunMetrics[]>(`/brands/${brandSlug}/metrics`);
 }
