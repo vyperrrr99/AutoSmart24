@@ -6,7 +6,7 @@ Non c'è alcun database locale e nessun merge da fare: questo worker scrive dire
 
 | | Primaria | Questa |
 |---|---|---|
-| IP pubblico | 81.56.1.228 | diverso (VPN) |
+| IP pubblico | quello della linea di casa | diverso (VPN) |
 | Database | locale | quello della primaria, via LAN |
 | Marche | le 13 nuove | le 10 storiche |
 
@@ -19,14 +19,20 @@ git --version
 
 ## 2. Verificare la VPN — da fare PRIMA di tutto il resto
 
-Con la VPN attiva, due condizioni devono valere insieme:
+Serve prima il riferimento. **Sulla macchina primaria** esegui:
 
 ```bash
-curl -s https://api.ipify.org; echo     # deve essere DIVERSO da 81.56.1.228
+curl -s https://api.ipify.org; echo     # annota questo valore
+```
+
+Poi, su questa macchina **con la VPN attiva**, due condizioni devono valere insieme:
+
+```bash
+curl -s https://api.ipify.org; echo     # deve essere DIVERSO dal valore annotato
 nc -zv 192.168.1.121 5434               # deve riuscire ("succeeded" / "open")
 ```
 
-- **Il primo fallisce** (stesso IP): la VPN non è attiva. Senza IP distinto questa macchina non aggiunge capacità — le richieste si sommerebbero a quelle della primaria sullo stesso indirizzo, con lo stesso rischio di blocco.
+- **Il primo fallisce** (stesso IP della primaria): la VPN non è attiva. Senza IP distinto questa macchina non aggiunge capacità — le richieste si sommerebbero a quelle della primaria sullo stesso indirizzo, con lo stesso rischio di blocco.
 - **Il secondo fallisce**: la VPN è full-tunnel e sta inghiottendo anche la rete locale. In Surfshark si risolve con **Bypasser** (split tunneling) escludendo `192.168.1.0/24`. Senza questo, il database condiviso non funziona.
 
 ## 3. Prendere il codice
