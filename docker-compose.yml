@@ -18,7 +18,7 @@ services:
       DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@postgres:5432/autosmart24
       SCRAPE_MIN_DELAY_SECONDS: "3"
       SCRAPE_MAX_DELAY_SECONDS: "8"
-      SCRAPE_CONCURRENCY: "6"
+      SCRAPE_CONCURRENCY: "8"
       SCRAPE_MAX_LISTING_AGE_YEARS: "5"
       SCRAPE_SESSION_REFRESH_REQUESTS: "30"
     ports:
