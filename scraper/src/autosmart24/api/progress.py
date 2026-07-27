@@ -57,7 +57,8 @@ def rates_from_history(runs: list[ScrapeRun]) -> tuple[float, float, bool]:
 
     search_avg = sum(search_rates) / len(search_rates) if search_rates else FALLBACK_SEARCH_RATE_PER_MIN
     detail_avg = sum(detail_rates) / len(detail_rates) if detail_rates else FALLBACK_DETAIL_RATE_PER_MIN
-    return max(search_avg, MIN_RATE_PER_MIN), max(detail_avg, MIN_RATE_PER_MIN), False
+    is_fallback = not search_rates or not detail_rates
+    return max(search_avg, MIN_RATE_PER_MIN), max(detail_avg, MIN_RATE_PER_MIN), is_fallback
 
 
 def eta_seconds(run: ScrapeRun, search_rate: float, detail_rate: float) -> int | None:

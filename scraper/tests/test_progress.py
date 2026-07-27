@@ -47,6 +47,10 @@ def test_percent_never_exceeds_one_hundred():
     assert percent(7000, 6800) == 100.0
 
 
+def test_percent_is_none_when_the_total_is_zero():
+    assert percent(120, 0) is None
+
+
 def test_rates_fall_back_when_there_is_no_history():
     search, detail, is_fallback = rates_from_history([])
 
@@ -70,6 +74,25 @@ def test_rates_are_derived_from_finished_runs():
     assert round(detail) == 60    # 6720 annunci / 112 min
 
 
+def test_rates_flag_is_fallback_when_only_one_phase_has_history():
+    """A search-finished but still-in-detail run provides one usable rate but
+    not the other; the estimate must be marked approximate."""
+    search_only = _run(
+        status="running",
+        phase="detail",
+        started_at=dt.datetime(2026, 7, 27, 3, 0, 0),
+        search_finished_at=dt.datetime(2026, 7, 27, 3, 8, 0),   # 480s
+        finished_at=None,  # Still running detail
+        listings_seen=7200, detail_enriched=2000,
+    )
+
+    search, detail, is_fallback = rates_from_history([search_only])
+
+    assert is_fallback is True
+    assert round(search) == 900  # From the run's search phase
+    assert detail == FALLBACK_DETAIL_RATE_PER_MIN  # No finished detail data
+
+
 def test_eta_uses_the_remaining_items_of_the_current_phase():
     run = _run(phase="detail", detail_enriched=1000, detail_total=4000)
 
@@ -79,6 +102,12 @@ def test_eta_uses_the_remaining_items_of_the_current_phase():
 
 def test_eta_is_none_without_a_total():
     run = _run(phase="detail", detail_enriched=1000, detail_total=None)
+
+    assert eta_seconds(run, search_rate=900.0, detail_rate=60.0) is None
+
+
+def test_eta_is_none_when_total_is_zero():
+    run = _run(phase="detail", detail_enriched=0, detail_total=0)
 
     assert eta_seconds(run, search_rate=900.0, detail_rate=60.0) is None
 
