@@ -70,6 +70,26 @@ def eta_seconds(run: ScrapeRun, search_rate: float, detail_rate: float) -> int |
     return int(remaining * 60.0 / max(rate, MIN_RATE_PER_MIN))
 
 
+def estimated_run_seconds(last_run: ScrapeRun, search_rate: float, detail_rate: float) -> int | None:
+    """Rough duration estimate for a brand's *next* sweep, derived from its
+    most recent finished run's item counts and the given phase rates.
+
+    Right after this feature deploys, a brand's most recent run may predate
+    the phase-tracking migration: detail_enriched is 0 on those pre-migration
+    rows, so the detail term below is 0 and the estimate covers only the
+    search phase -- a large under-estimate versus the real sweep duration.
+    This is intentional and not corrected here: it self-resolves once the
+    brand has completed one run under the new code, at which point
+    detail_enriched reflects the real detail-phase item count.
+    """
+    if last_run is None:
+        return None
+    return int(
+        (last_run.listings_seen or 0) * 60.0 / max(search_rate, MIN_RATE_PER_MIN)
+        + (last_run.detail_enriched or 0) * 60.0 / max(detail_rate, MIN_RATE_PER_MIN)
+    )
+
+
 def run_metrics(run: ScrapeRun) -> dict | None:
     """One calibration row for a finished run; None while it is still going."""
     if run.finished_at is None:

@@ -2,6 +2,7 @@ import datetime as dt
 
 from autosmart24.api.progress import (
     FALLBACK_DETAIL_RATE_PER_MIN,
+    estimated_run_seconds,
     eta_seconds,
     percent,
     phase_progress,
@@ -134,3 +135,30 @@ def test_run_metrics_reports_both_phases():
 
 def test_run_metrics_is_none_for_a_run_still_going():
     assert run_metrics(_run(phase="search")) is None
+
+
+def test_estimated_run_seconds_is_none_without_a_last_run():
+    assert estimated_run_seconds(None, search_rate=900.0, detail_rate=60.0) is None
+
+
+def test_estimated_run_seconds_covers_both_phases():
+    last = _run(status="success", listings_seen=7200, detail_enriched=6720)
+
+    # 7200/900*60 + 6720/60*60 = 480 + 6720 = 7200
+    assert estimated_run_seconds(last, search_rate=900.0, detail_rate=60.0) == 7200
+
+
+def test_estimated_run_seconds_underestimates_for_a_pre_migration_run():
+    """Right after deploy, a brand's last run may predate the phase-tracking
+    migration: detail_enriched is 0 on that row, so the estimate only covers
+    the search phase and is a large under-estimate of the real sweep
+    duration. This is expected -- it resolves itself once the brand has run
+    once under the new code -- but it must be explicit and tested, not
+    silently wrong."""
+    pre_migration_last_run = _run(status="success", listings_seen=7200, detail_enriched=0)
+
+    estimate = estimated_run_seconds(pre_migration_last_run, search_rate=900.0, detail_rate=60.0)
+
+    # Search phase only: 7200/900*60 = 480s, nowhere near the ~7200s a full
+    # sweep (search + detail) actually takes for this many listings.
+    assert estimate == 480

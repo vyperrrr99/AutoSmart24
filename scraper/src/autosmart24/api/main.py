@@ -9,7 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from autosmart24.api.progress import eta_seconds, percent, phase_progress, rates_from_history, run_metrics
+from autosmart24.api.progress import (
+    estimated_run_seconds,
+    eta_seconds,
+    percent,
+    phase_progress,
+    rates_from_history,
+    run_metrics,
+)
 from autosmart24.api.schemas import (
     AddBrandsRequest,
     ApplyDefaultsRequest,
@@ -281,7 +288,11 @@ def create_app(
                 started_at=running.started_at,
             )
 
-        # Pending = brands with a live, unpaused job, excluding the one running.
+        # Pending here does not mean "queued for execution" -- the scheduler
+        # is never consulted. This lists every tracked, unpaused brand
+        # (excluding the one currently running) in alphabetical order by
+        # slug; `position` is that list's index, not an actual execution
+        # position in the scheduler's queue.
         pending: list[QueuePendingOut] = []
         rows = session.execute(select(TrackedBrand).order_by(TrackedBrand.slug)).scalars().all()
         position = 0
@@ -299,11 +310,8 @@ def create_app(
             brand_eta = None
             if last is not None:
                 search_rate, detail_rate, _ = rates_from_history(list(history))
-                brand_eta = int(
-                    (last.listings_seen or 0) * 60.0 / max(search_rate, 1.0)
-                    + (last.detail_enriched or 0) * 60.0 / max(detail_rate, 1.0)
-                )
-                total_eta += brand_eta
+                brand_eta = estimated_run_seconds(last, search_rate, detail_rate)
+                total_eta += brand_eta or 0
             pending.append(
                 QueuePendingOut(slug=row.slug, brand=row.display_name, position=position, eta_seconds=brand_eta)
             )
