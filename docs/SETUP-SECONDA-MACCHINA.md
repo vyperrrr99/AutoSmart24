@@ -42,8 +42,9 @@ nc -zv 192.168.1.121 5434               # deve riuscire ("succeeded" / "open")
 ```bash
 git clone https://github.com/vyperrrr99/AutoSmart24.git
 cd AutoSmart24
-git checkout feature/scraper-queue-live-progress
 ```
+
+Il codice è su `master`: non serve cambiare branch.
 
 ## 4. Avviare il worker
 
