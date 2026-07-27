@@ -1,3 +1,4 @@
+import { RunProgress } from "./RunProgress";
 import type { BrandStatusOut } from "../types";
 
 interface BrandCardProps {
@@ -23,6 +24,15 @@ export function BrandCard({ brand, onPause, onResume, onRunNow, onSelect }: Bran
     <div className="brand-card" data-testid={`brand-card-${brand.slug}`}>
       <h3 onClick={() => onSelect(brand.slug)}>{brand.brand}</h3>
       <span className={`status-badge status-${status.toLowerCase().replace(" ", "-")}`}>{status}</span>
+      {brand.last_run?.status === "running" && (
+        <RunProgress
+          phase={brand.last_run.phase}
+          done={brand.last_run.phase === "detail" ? brand.last_run.detail_enriched : brand.last_run.listings_seen}
+          total={brand.last_run.phase === "detail" ? brand.last_run.detail_total : brand.last_run.search_total}
+          etaSeconds={null}
+          etaIsFallback={false}
+        />
+      )}
       {brand.last_run && (
         <ul>
           <li>Ultimo run: {new Date(brand.last_run.started_at).toLocaleString("it-IT")}</li>

@@ -15,6 +15,7 @@ const brand: BrandStatusOut = {
   last_run: {
     id: 1, brand: "Fiat", started_at: "2026-07-24T10:00:00Z", finished_at: "2026-07-24T10:05:00Z",
     status: "success", listings_seen: 100, new_listings: 5, price_changes: 3, sold_detected: 2, errors_count: 0,
+    phase: null, search_finished_at: null, search_total: null, detail_total: null, detail_enriched: 0,
   },
 };
 
@@ -43,5 +44,27 @@ describe("BrandCard", () => {
     const erroredBrand = { ...brand, last_run: { ...brand.last_run!, status: "error", errors_count: 1 } };
     render(<BrandCard brand={erroredBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
     expect(screen.getByText("Errore")).toBeInTheDocument();
+  });
+
+  it("does not show a progress bar when no run is active", () => {
+    render(<BrandCard brand={brand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.queryByTestId("run-progress-bar")).not.toBeInTheDocument();
+  });
+
+  it("shows a progress bar with detail-phase counts while a run is in progress", () => {
+    const runningBrand = {
+      ...brand,
+      last_run: {
+        ...brand.last_run!,
+        status: "running",
+        phase: "detail",
+        search_total: 100,
+        detail_total: 100,
+        detail_enriched: 40,
+      },
+    };
+    render(<BrandCard brand={runningBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByTestId("run-progress-bar")).toBeInTheDocument();
+    expect(screen.getByText("40,0%")).toBeInTheDocument();
   });
 });

@@ -1,20 +1,27 @@
 import { useEffect, useState } from "react";
 import { BrandCard } from "./components/BrandCard";
 import { BrandDetail } from "./components/BrandDetail";
+import { BrandFilters, filterBrands, type BrandStatusFilter } from "./components/BrandFilters";
 import { ManageBrands } from "./components/ManageBrands";
-import { fetchBrands, pauseBrand, resumeBrand, runBrandNow } from "./api";
-import type { BrandStatusOut } from "./types";
+import { QueuePanel } from "./components/QueuePanel";
+import { fetchBrands, fetchQueue, pauseBrand, resumeBrand, resumeQueue, runBrandNow } from "./api";
+import type { BrandStatusOut, QueueOut } from "./types";
 
 const POLL_INTERVAL_ACTIVE_MS = 3000;
 const POLL_INTERVAL_IDLE_MS = 15000;
 
 export function App() {
   const [brands, setBrands] = useState<BrandStatusOut[]>([]);
+  const [queue, setQueue] = useState<QueueOut | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [view, setView] = useState<"overview" | "manage">("overview");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<BrandStatusFilter>("all");
 
   async function reload() {
-    setBrands(await fetchBrands());
+    const [nextBrands, nextQueue] = await Promise.all([fetchBrands(), fetchQueue()]);
+    setBrands(nextBrands);
+    setQueue(nextQueue);
   }
 
   useEffect(() => {
@@ -22,11 +29,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const hasActiveRun = brands.some((b) => b.last_run?.status === "running");
+    const hasActiveRun = queue?.current != null || brands.some((b) => b.last_run?.status === "running");
     const interval = hasActiveRun ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS;
     const timer = setInterval(reload, interval);
     return () => clearInterval(timer);
-  }, [brands]);
+  }, [brands, queue]);
+
+  async function handleResumeQueue() {
+    await resumeQueue();
+    await reload();
+  }
 
   async function handlePause(slug: string) {
     await pauseBrand(slug);
@@ -56,8 +68,15 @@ export function App() {
       </nav>
       {view === "overview" && (
         <>
+          <QueuePanel queue={queue} onResume={handleResumeQueue} />
+          <BrandFilters
+            query={query}
+            status={statusFilter}
+            onQueryChange={setQuery}
+            onStatusChange={setStatusFilter}
+          />
           <div className="brand-grid">
-            {brands.map((brand) => (
+            {filterBrands(brands, query, statusFilter).map((brand) => (
               <BrandCard
                 key={brand.slug}
                 brand={brand}
