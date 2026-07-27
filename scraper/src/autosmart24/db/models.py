@@ -122,6 +122,12 @@ class ScrapeRun(Base):
     sold_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     errors_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    phase: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    search_finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    search_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail_enriched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
 
 class ScrapeEvent(Base):
     __tablename__ = "scrape_events"
