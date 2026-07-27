@@ -57,7 +57,12 @@ describe("filterBrands", () => {
   });
 
   it("combines query and status filters with AND logic", () => {
-    const result = filterBrands(brands, "toy", "paused");
+    const testBrands = [
+      brand("toyota", { paused: true }),
+      brand("toyota-gr", { paused: false }),
+      brand("kia", { paused: true }),
+    ];
+    const result = filterBrands(testBrands, "toy", "paused");
     expect(result.map((b) => b.slug)).toEqual(["toyota"]);
   });
 
