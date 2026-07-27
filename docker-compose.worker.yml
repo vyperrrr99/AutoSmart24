@@ -1,29 +1,55 @@
-# Worker-only stack for a SECOND machine.
+# Self-contained stack for the SECOND machine (one-off).
 #
-# It runs the scraper against the PRIMARY machine's Postgres over the LAN —
-# there is no local database and no dashboard here, so nothing needs merging
-# afterwards. The product spec (§2.6) calls for exactly this: extra workers on
-# other PCs pointing at one central Postgres, coordinated through the database
-# rather than a broker.
+# The second machine is a laptop that moves between networks, so it cannot rely
+# on reaching the primary's Postgres over the LAN. It therefore runs its own
+# database, seeded from a dump of the primary, and its work is merged back
+# afterwards with scripts/merge-from-worker.sh.
+#
+# Ports are shifted (5435/8002/5174) so this can also be brought up on the
+# primary machine for testing without colliding with the live stack.
 #
 # Usage:
-#   AS24_DB_HOST=192.168.1.121 sudo docker compose -f docker-compose.worker.yml up -d --build
-#
-# The API is published on 8001 here too, so this machine can be driven with the
-# same curl commands as the primary one.
+#   docker compose -f docker-compose.worker.yml up -d --build
+#   # then restore the primary's dump into it — see docs/SETUP-SECONDA-MACCHINA.md
 
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: autosmart24
+      POSTGRES_PASSWORD: autosmart24
+      POSTGRES_DB: autosmart24
+    ports:
+      - "5435:5432"
+    volumes:
+      - worker_postgres_data:/var/lib/postgresql/data
+
   app:
     build: ./scraper
+    depends_on:
+      - postgres
     environment:
-      DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@${AS24_DB_HOST:?set AS24_DB_HOST to the primary machine's LAN IP}:5434/autosmart24
+      DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@postgres:5432/autosmart24
       SCRAPE_MIN_DELAY_SECONDS: "3"
       SCRAPE_MAX_DELAY_SECONDS: "8"
       # This machine leaves through a different public IP (VPN), so its request
-      # budget is its own. Still start at 8 — the value validated on the primary
-      # — and only raise it after watching for blocks.
+      # budget is its own. 8 is the value validated on the primary over several
+      # hours with zero blocks; raise it only after watching for blocks here.
       SCRAPE_CONCURRENCY: "8"
       SCRAPE_MAX_LISTING_AGE_YEARS: "10"
       SCRAPE_SESSION_REFRESH_REQUESTS: "30"
     ports:
-      - "8001:8000"
+      - "8002:8000"
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_API_BASE_URL: http://localhost:8002
+    depends_on:
+      - app
+    ports:
+      - "5174:80"
+
+volumes:
+  worker_postgres_data:
