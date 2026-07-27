@@ -10,6 +10,14 @@ describe("formatDuration", () => {
   it("formats minutes only under an hour", () => {
     expect(formatDuration(480)).toBe("8m");
   });
+
+  it("handles rounding boundary at hour threshold", () => {
+    expect(formatDuration(3599)).toBe("1h 0m");
+  });
+
+  it("handles carry when minutes round to 60", () => {
+    expect(formatDuration(7170)).toBe("2h 0m");
+  });
 });
 
 describe("RunProgress", () => {
@@ -26,6 +34,7 @@ describe("RunProgress", () => {
 
     expect(screen.getByTestId("run-progress-bar")).toHaveAttribute("data-indeterminate", "true");
     expect(screen.getByText(/120 annunci/)).toBeInTheDocument();
+    expect(screen.queryByText(/%/)).toBeNull();
   });
 
   it("flags a fallback estimate", () => {
