@@ -43,12 +43,19 @@ class BrandScheduler:
         # parallel requests to autoscout24. One worker makes the queue
         # serial, keeping outbound concurrency at exactly one sweep's worth.
         #
-        # misfire_grace_time must be generous for the same reason: a brand
-        # queued behind a multi-hour sweep is submitted long after its
-        # trigger time, and the 1s default would silently drop it.
+        # misfire_grace_time must be None ("run it no matter how late", per
+        # APScheduler's docs). The misfire check runs in the worker thread at
+        # EXECUTION time (apscheduler.executors.base.run_job), comparing now()
+        # against the job's captured run_time -- not at submission time. With
+        # a single worker, a brand queued behind other sweeps can wait many
+        # hours before that worker frees up (a single sweep has taken ~2h
+        # measured), so any finite grace window -- even one chosen to be
+        # generous, like the 3600s this used to be -- will already have
+        # elapsed by execution time and the job is silently discarded: no
+        # run row, no event, nothing on the dashboard.
         self.scheduler = scheduler or BackgroundScheduler(
             executors={"default": ThreadPoolExecutor(max_workers=1)},
-            job_defaults={"misfire_grace_time": 3600, "max_instances": 1},
+            job_defaults={"misfire_grace_time": None, "max_instances": 1},
         )
 
     def schedule_brand(

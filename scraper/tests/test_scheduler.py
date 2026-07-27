@@ -1,3 +1,4 @@
+import datetime as dt
 import threading
 import time
 
@@ -143,11 +144,52 @@ def test_default_scheduler_runs_one_job_at_a_time():
     assert max(peak) == 1
 
 
-def test_default_scheduler_tolerates_late_job_submission():
-    """A job waiting behind a long run must not be discarded: the default
-    misfire_grace_time of 1s would drop it."""
+def test_default_scheduler_runs_a_job_queued_far_behind_a_long_running_one():
+    """A job waiting behind a long-running one must not be discarded.
+
+    The misfire check runs in the worker thread at EXECUTION time, comparing
+    now() against the job's run_time captured when it became due -- not
+    against how long it has been queued. We cannot literally sleep an hour
+    in a test, so instead this reproduces an hours-long wait directly: the
+    second job is given a next_run_time far enough in the past that, by the
+    time the single worker frees up (however soon that is), the gap between
+    "now" and that run_time already exceeds a 3600s grace window. A finite
+    misfire_grace_time (e.g. the old 3600s) discards it; None ("run it no
+    matter how late") runs it anyway.
+
+    This must FAIL if BrandScheduler reverts to misfire_grace_time=3600 and
+    PASS with misfire_grace_time=None.
+    """
     scheduler = BrandScheduler()
+    ran: list[str] = []
+    first_started = threading.Event()
+    release_first = threading.Event()
 
-    grace = scheduler.scheduler._job_defaults["misfire_grace_time"]
+    def first_job(brand):
+        first_started.set()
+        release_first.wait(timeout=10)
+        ran.append("first")
 
-    assert grace >= 3600
+    def second_job(brand):
+        ran.append("second")
+
+    scheduler.scheduler.start()
+    try:
+        scheduler.scheduler.add_job(first_job, id="first", args=[None])
+        assert first_started.wait(timeout=10), "first job never started"
+
+        # Far enough in the past that a 3600s grace window has already
+        # elapsed by the time the single worker gets to it, no matter how
+        # quickly that happens.
+        overdue_run_time = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=5)
+        scheduler.scheduler.add_job(second_job, id="second", args=[None], next_run_time=overdue_run_time)
+
+        release_first.set()
+
+        deadline = time.time() + 10
+        while "second" not in ran and time.time() < deadline:
+            time.sleep(0.05)
+    finally:
+        scheduler.shutdown()
+
+    assert ran == ["first", "second"]
