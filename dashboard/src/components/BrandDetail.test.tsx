@@ -1,11 +1,18 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrandDetail } from "./BrandDetail";
 import * as api from "../api";
 
 vi.mock("../api");
 
 describe("BrandDetail", () => {
+  // Mocked calls otherwise accumulate across tests in this file, which would
+  // let the polling assertion below pass even without an interval (the first
+  // test's single call plus this test's initial load already exceeds 1).
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders events after loading", async () => {
     vi.mocked(api.fetchBrandRuns).mockResolvedValue([]);
     vi.mocked(api.fetchBrandEvents).mockResolvedValue([

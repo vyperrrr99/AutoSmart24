@@ -24,4 +24,19 @@ describe("BrandMetrics", () => {
 
     expect(screen.getByText(/nessuna run conclusa/i)).toBeInTheDocument();
   });
+
+  it("shows a placeholder instead of the literal string null for missing numeric fields", () => {
+    render(
+      <BrandMetrics
+        metrics={[{
+          run_id: 7, started_at: "2026-07-27T03:00:00", status: "running",
+          search_seconds: null, search_items: null, search_rate_per_min: null,
+          detail_seconds: null, detail_items: null, detail_rate_per_min: null,
+        }]}
+      />,
+    );
+
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
 });
