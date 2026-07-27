@@ -169,3 +169,17 @@ body {
   font-size: 0.9rem;
   margin-top: 0.5rem;
 }
+
+.brand-filters {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.brand-filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85em;
+  gap: 4px;
+}
