@@ -4,7 +4,7 @@ from autosmart24.config import BrandConfig
 from autosmart24.db.models import Listing, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
-from autosmart24.scraping.http_client import RateLimitedClient
+from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 
 BRAND = BrandConfig(slug="fiat", make_id=28, display_name="Fiat")
 
@@ -134,6 +134,8 @@ def test_a_listing_that_reappears_on_the_second_check_stays_active(db_session):
     assert listing.status == "active"
     assert run.sold_detected == 0
     assert run.errors_count >= 1, "la discordanza va registrata come anomalia"
+    events = db_session.query(ScrapeEvent).filter_by(level="warning").all()
+    assert any("flapping-1" in e.message for e in events), "la discordanza va anche registrata come evento"
 
 
 def test_a_reassigned_id_counts_as_removed_on_both_checks(db_session):
@@ -156,19 +158,67 @@ def test_a_reassigned_id_counts_as_removed_on_both_checks(db_session):
 
 
 def test_no_candidates_means_no_second_pass(db_session):
-    """A listing still present in the search results never becomes a candidate,
-    so the confirmation pass must issue no requests at all."""
+    """A listing missing from the search results but still active on its own
+    detail page never becomes a sold candidate, so the confirmation pass must
+    issue no further requests for it -- only the single first-pass check."""
     db_session.add(_listing("present-1", detail_scraped=True))
+    db_session.add(_listing("still-active-1", detail_scraped=True))
     db_session.commit()
     calls = []
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
-        yield _snippet("present-1")
+        yield _snippet("present-1")  # still-active-1 is missing from the sweep
 
     def fake_detail(client, url):
         calls.append(url)
-        return DetailResult(sold=True)
+        return DetailResult(sold=False, data={"brand": "Fiat", "model": "Panda", "price": 10000})
 
     run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
 
-    assert calls == []
+    assert calls == ["https://www.autoscout24.it/annunci/still-active-1"], (
+        "present-1 must never be queried; still-active-1 must be checked exactly "
+        "once -- looks_removed is False so it never becomes a candidate and the "
+        "confirmation pass must issue no second request for it"
+    )
+
+
+def test_a_block_during_the_confirmation_pass_leaves_unreached_candidates_active(db_session):
+    """run_worker_pool yields every result already produced and raises the
+    captured exception only after the job queue is drained (see
+    concurrency.py) -- so with two candidates in the confirmation pass, one
+    already confirmed before the block hit must be marked sold, while the one
+    the pool never reached must stay active. A block is not evidence of a
+    sale for a candidate nobody actually re-checked."""
+    db_session.add(_listing("blk-a", detail_scraped=True))
+    db_session.add(_listing("blk-b", detail_scraped=True))
+    db_session.commit()
+
+    call_counts: dict[str, int] = {}
+    second_pass_hits = {"n": 0}
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())  # both listings are missing from the search results
+
+    def fake_detail(client, url):
+        call_counts[url] = call_counts.get(url, 0) + 1
+        if call_counts[url] == 1:
+            # First pass: both look removed, both become candidates.
+            return DetailResult(sold=True)
+        # Second pass (this URL's second call): the first candidate the pool
+        # reaches confirms removed and is committed as sold; the second one
+        # the pool reaches raises the block, so it never gets a verdict.
+        second_pass_hits["n"] += 1
+        if second_pass_hits["n"] == 1:
+            return DetailResult(sold=True)
+        raise BlockedError(403, url)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    assert run.status == "blocked"
+    listings = [db_session.get(Listing, "blk-a"), db_session.get(Listing, "blk-b")]
+    sold = [l for l in listings if l.status == "sold"]
+    active = [l for l in listings if l.status == "active"]
+    assert len(sold) == 1, "the candidate confirmed before the block must be sold"
+    assert sold[0].sold_at is not None
+    assert len(active) == 1, "the candidate the pool never reached must stay active"
+    assert active[0].sold_at is None
