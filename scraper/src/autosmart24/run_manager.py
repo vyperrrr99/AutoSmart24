@@ -15,6 +15,7 @@ from autosmart24.scraping.concurrency import run_worker_pool
 from autosmart24.scraping.crawler import crawl_brand
 from autosmart24.scraping.detail_queue import fetch_detail
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
+from autosmart24.scraping.sold_confirmation import looks_removed
 
 DETAIL_DB_PAGE_SIZE = 50
 NEW_LISTING_COMMIT_BATCH_SIZE = 100
@@ -378,6 +379,12 @@ def run_brand_sweep(
         sold_count = 0
         missing_jobs = [(listing_id, active_rows_by_id[listing_id].url) for listing_id in missing_ids]
 
+        # First pass: absence from the search results is only a suspicion. A
+        # single request that lands inside a bad window is enough to invent a
+        # sale, so nothing is decided here — candidates are re-checked at the
+        # end of the sweep, minutes later.
+        sold_candidates: list[str] = []
+
         def _missing_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
             listing_id, url = job
             return [(listing_id, fetch_detail_fn(client, url))]
@@ -388,10 +395,8 @@ def run_brand_sweep(
             ):
                 row = active_rows_by_id[listing_id]
                 row.last_checked_at = now
-                if result.sold:
-                    row.status = "sold"
-                    row.sold_at = now
-                    sold_count += 1
+                if looks_removed(result, row.brand):
+                    sold_candidates.append(listing_id)
                 else:
                     run.errors_count += 1
                     _log_event(
@@ -415,6 +420,45 @@ def run_brand_sweep(
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
             )
+
+        # Second pass: re-check every candidate. Minutes have gone by since the
+        # first check, so a brief site failure cannot fool both. Only listings
+        # that look removed twice are declared sold.
+        if sold_candidates and run.status != "blocked":
+            confirm_now = _now()
+            confirm_jobs = [(lid, active_rows_by_id[lid].url) for lid in sold_candidates]
+
+            def _confirm_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
+                listing_id, url = job
+                return [(listing_id, fetch_detail_fn(client, url))]
+
+            try:
+                for listing_id, result in run_worker_pool(
+                    confirm_jobs, _confirm_worker, client_factory, concurrency, session_refresh_requests
+                ):
+                    row = active_rows_by_id[listing_id]
+                    row.last_checked_at = confirm_now
+                    if looks_removed(result, row.brand):
+                        row.status = "sold"
+                        row.sold_at = confirm_now
+                        sold_count += 1
+                    else:
+                        # Removed on the first check, alive on the second: the
+                        # site was answering badly. Exactly the case that
+                        # produced 139 false sales before this pass existed.
+                        run.errors_count += 1
+                        _log_event(
+                            session, run, "warning",
+                            f"Listing {listing_id} looked removed then active again: no sale declared",
+                            url=row.url,
+                        )
+                session.commit()
+            except BlockedError as exc:
+                # Unconfirmed candidates stay active: a block is not evidence
+                # of a sale.
+                run.status = "blocked"
+                run.errors_count += 1
+                _log_event(session, run, "blocked", str(exc), url=exc.url)
 
         run.listings_seen = listings_seen
         run.new_listings = len(new_ids)

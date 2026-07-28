@@ -90,3 +90,85 @@ def test_enrichment_records_the_anomaly_as_an_event(db_session):
 
     events = db_session.query(ScrapeEvent).filter_by(level="warning").all()
     assert any("anomaly-1" in e.message for e in events)
+
+
+def test_a_vanished_listing_needs_two_confirmations_to_be_sold(db_session):
+    db_session.add(_listing("gone-1", detail_scraped=True))
+    db_session.commit()
+    calls = []
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())          # non compare più nella ricerca
+
+    def fake_detail(client, url):
+        calls.append(url)
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    assert len([u for u in calls if "gone-1" in u]) == 2, "servono due verifiche indipendenti"
+    listing = db_session.get(Listing, "gone-1")
+    assert listing.status == "sold"
+    assert run.sold_detected == 1
+
+
+def test_a_listing_that_reappears_on_the_second_check_stays_active(db_session):
+    """The transient-failure case: the first check answers removed, the second —
+    minutes later — finds it alive. No sale is declared."""
+    db_session.add(_listing("flapping-1", detail_scraped=True))
+    db_session.commit()
+    seen = {"n": 0}
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())
+
+    def fake_detail(client, url):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return DetailResult(sold=True)
+        return DetailResult(sold=False, data={"brand": "Fiat", "model": "Panda", "price": 10000})
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    listing = db_session.get(Listing, "flapping-1")
+    assert listing.status == "active"
+    assert run.sold_detected == 0
+    assert run.errors_count >= 1, "la discordanza va registrata come anomalia"
+
+
+def test_a_reassigned_id_counts_as_removed_on_both_checks(db_session):
+    """Both checks load a live page, but for a different brand: the id was
+    recycled, so our listing is gone."""
+    db_session.add(_listing("reused-1", detail_scraped=True))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())
+
+    def fake_detail(client, url):
+        return DetailResult(sold=False, data={"brand": "Audi", "model": "Q3", "price": 20000})
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    listing = db_session.get(Listing, "reused-1")
+    assert listing.status == "sold"
+    assert run.sold_detected == 1
+
+
+def test_no_candidates_means_no_second_pass(db_session):
+    """A listing still present in the search results never becomes a candidate,
+    so the confirmation pass must issue no requests at all."""
+    db_session.add(_listing("present-1", detail_scraped=True))
+    db_session.commit()
+    calls = []
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _snippet("present-1")
+
+    def fake_detail(client, url):
+        calls.append(url)
+        return DetailResult(sold=True)
+
+    run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_detail)
+
+    assert calls == []
