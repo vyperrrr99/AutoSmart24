@@ -42,7 +42,7 @@ def process_detail_backlog(
     exclude_ids: set[str] = frozenset(),
     year_from: int | None = None,
 ) -> int:
-    total_sold = 0
+    total_reported = 0
     # Rows the pool did not report on are parked here for the rest of this call,
     # so the LIMIT-ed query can never re-select the same unprocessable row
     # forever. Without this, one permanently-failing detail page becomes an
@@ -86,13 +86,17 @@ def process_detail_backlog(
         ).scalars().all()
 
         if not pending:
-            return total_sold
+            return total_reported
 
         rows_by_id = {row.id: row for row in pending}
         jobs = [(row.id, row.url) for row in pending]
         enriched = 0
-        sold = 0
+        reported_removed = 0
         handled: set[str] = set()
+        # Rows left active (removal reported) also get parked below: they are
+        # still detail_scraped=False and active, so without this the paging
+        # query would re-select them forever within this same call.
+        reported_removed_ids: set[str] = set()
         now = _now()
 
         def _detail_worker(job: tuple[str, str], client: RateLimitedClient) -> list[tuple[str, object]]:
@@ -107,9 +111,23 @@ def process_detail_backlog(
                 row = rows_by_id[listing_id]
                 row.last_checked_at = now
                 if result.sold:
-                    row.status = "sold"
-                    row.sold_at = now
-                    sold += 1
+                    # This listing is in the enrichment queue precisely because
+                    # the search results just showed it alive, so a removal
+                    # reported here contradicts an observation made minutes ago
+                    # rather than confirming one. A transient site failure
+                    # produced 139 false sales this way on 2026-07-28.
+                    #
+                    # Leave the row active and detail_scraped false: it was
+                    # never actually enriched, and if it really did sell it will
+                    # be absent from the next sweep's search results and judged
+                    # by the missing-listing path, which has grounds to decide.
+                    reported_removed += 1
+                    reported_removed_ids.add(listing_id)
+                    _log_event(
+                        session, run, "warning",
+                        f"Detail page reported removed for {row.id}, seen alive in this sweep: left active",
+                        url=row.url,
+                    )
                     continue
 
                 detail = result.data
@@ -162,19 +180,19 @@ def process_detail_backlog(
             run.detail_enriched = (run.detail_enriched or 0) + enriched
             _log_event(
                 session, run, "info",
-                f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
+                f"Detail backlog page: enriched {enriched}, reported removed {reported_removed} (page size {len(pending)})",
             )
             session.commit()
-            return total_sold + sold
+            return total_reported + reported_removed
 
         run.detail_enriched = (run.detail_enriched or 0) + enriched
         _log_event(
             session, run, "info",
-            f"Detail backlog page: enriched {enriched}, confirmed sold {sold} (page size {len(pending)})",
+            f"Detail backlog page: enriched {enriched}, reported removed {reported_removed} (page size {len(pending)})",
         )
         session.commit()
-        total_sold += sold
-        failed_ids |= set(rows_by_id) - handled
+        total_reported += reported_removed
+        failed_ids |= (set(rows_by_id) - handled) | reported_removed_ids
 
 
 def _iter_batches(iterable: Iterable[dict], batch_size: int) -> Iterator[list[dict]]:
@@ -387,12 +405,12 @@ def run_brand_sweep(
             run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
 
-        backlog_sold_count = 0
+        backlog_removed_reports = 0
         if run.status != "blocked":
             run.phase = "detail"
             run.search_finished_at = _now()
             session.commit()
-            backlog_sold_count = process_detail_backlog(
+            backlog_removed_reports = process_detail_backlog(
                 session, client_factory, brand, run,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
@@ -401,7 +419,9 @@ def run_brand_sweep(
         run.listings_seen = listings_seen
         run.new_listings = len(new_ids)
         run.price_changes = price_changes
-        run.sold_detected = sold_count + backlog_sold_count
+        # Only the missing-listing path can declare a sale; the backlog's
+        # removal reports are diagnostic and deliberately excluded.
+        run.sold_detected = sold_count
         if run.status != "blocked":
             run.status = "success"
         run.phase = None

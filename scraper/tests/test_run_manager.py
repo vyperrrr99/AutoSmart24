@@ -326,7 +326,10 @@ def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
     assert run.errors_count == 2
 
 
-def test_process_detail_backlog_returns_sold_count(db_session):
+def test_process_detail_backlog_reports_removals_without_selling(db_session):
+    """A detail page reporting removal no longer sells the listing: it is in the
+    backlog because the search results just showed it alive. The count returned
+    is diagnostic only."""
     db_session.add(_existing_listing("backlog-sold-1", 10000, detail_scraped=False))
     db_session.commit()
     run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
@@ -336,16 +339,19 @@ def test_process_detail_backlog_returns_sold_count(db_session):
     def fake_fetch_detail(client, url):
         return DetailResult(sold=True)
 
-    sold = process_detail_backlog(db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail)
+    reported = process_detail_backlog(db_session, _client, BRAND, run, fetch_detail_fn=fake_fetch_detail)
 
-    assert sold == 1
+    assert reported == 1
+    listing = db_session.get(Listing, "backlog-sold-1")
+    assert listing.status == "active"
+    assert listing.detail_scraped is False
 
 
-def test_run_brand_sweep_counts_backlog_confirmed_sold_in_sold_detected(db_session):
-    # Listing is still present in the current sweep (so it does NOT go through the
-    # missing_ids/sold-confirmation loop) but hasn't had its detail page scraped yet,
-    # so it is picked up by the detail backlog pass, where the detail page reveals
-    # it as sold.
+def test_run_brand_sweep_does_not_count_backlog_removals_as_sales(db_session):
+    """The listing IS present in the current sweep, so it never reaches the
+    missing_ids path; the backlog pass sees its detail page report a removal.
+    Before 2026-07-28 that marked it sold, which produced 139 false sales in a
+    single Lancia run. It must now stay active."""
     db_session.add(_existing_listing("backlog-sold-2", 10000, detail_scraped=False))
     db_session.commit()
 
@@ -357,9 +363,9 @@ def test_run_brand_sweep_counts_backlog_confirmed_sold_in_sold_detected(db_sessi
 
     run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
 
-    assert run.sold_detected == 1
+    assert run.sold_detected == 0
     listing = db_session.get(Listing, "backlog-sold-2")
-    assert listing.status == "sold"
+    assert listing.status == "active"
 
 
 def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
