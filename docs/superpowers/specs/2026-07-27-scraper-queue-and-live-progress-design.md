@@ -230,3 +230,40 @@ Il piano di implementazione deve quindi collocare il lavoro di backend in una fi
 - **Il giro a 10 anni sulle marche storiche eccede le 24 ore.** Le ~21h di arricchimento del delta più le ~5,5h di ricerca superano la finestra giornaliera. `max_instances=1` evita l'accumulo, ma il primo giro completo va pianificato come operazione dedicata, non affidato al cron notturno.
 - **La percentuale della fase di dettaglio può non raggiungere il 100%.** `process_detail_backlog` parcheggia in `failed_ids` gli annunci che il pool non è riuscito a processare, per non ripescarli all'infinito: quegli annunci restano `detail_scraped = false` e non vengono conteggiati in `detail_enriched`. La barra si ferma quindi poco sotto il totale prima che la run chiuda con `success`. La UI deve considerare conclusa la fase quando la run cambia stato, non quando la percentuale tocca 100.
 - **L'ordine della coda non è configurabile.** Deriva dall'ordine di registrazione dei job. Se in futuro servisse dare priorità a certe marche, servirà una coda esplicita a DB (opzione valutata e scartata per YAGNI in questa iterazione).
+
+---
+
+## Addendum 28/07/2026 — resilienza agli errori di rete (da affrontare)
+
+Difetto emerso in produzione la notte del 27/07: due marche (MINI, MG) sono fallite con `timed out` nella stessa finestra di tre minuti. La coda ha proseguito correttamente con le altre — l'asimmetria `blocked`/`error` ha funzionato — ma le due marche colpite sono state perse per intero invece di saltare le sole pagine problematiche. MINI aveva già 5.499 annunci arricchiti su 5.988 e ne mancavano 488.
+
+### Catena del fallimento
+
+`RateLimitedClient` ritenta già 3 volte per richiesta (timeout 15s, pause in mezzo). Il problema è a valle: in `scraping/concurrency.py`, il worker che esaurisce i tentativi fa
+
+```python
+except BaseException as exc:
+    error_holder.append(exc)
+    _drain_queue()        # scarta TUTTI i job rimanenti
+```
+
+Gli altri worker trovano la coda vuota ed escono; il pool rilancia l'eccezione; `process_detail_backlog` cattura solo `BlockedError`, quindi il timeout arriva all'`except Exception` di `run_brand_sweep`, che chiude la run con `error`. Una pagina scaduta annulla l'intera marca, compreso il lavoro già riuscito.
+
+Il commento nel codice dichiara l'intento — evitare che un thread muoia in silenzio troncando la lista dei job — ed è corretto; è la reazione a essere sproporzionata per un guasto transitorio.
+
+### Perché non è una modifica banale
+
+Le due fasi hanno conseguenze opposte se si salta del lavoro:
+
+- **Dettaglio**: saltare un annuncio è innocuo. Resta `detail_scraped = false` e viene ripreso alla run successiva.
+- **Ricerca**: saltare una pagina significa non vedere quegli annunci, che finiscono in `missing_ids` e vengono trattati come *potenzialmente venduti*. Oggi ciascuno viene verificato prima di essere dichiarato tale, quindi non nascono vendite dal nulla; ma se anche quelle verifiche cadessero nella stessa finestra di rete, si otterrebbero **falsi `sold` su annunci vivi** — una corruzione silenziosa, peggiore di una marca da rifare.
+
+### Direzione proposta
+
+1. Il pool non svuota più la coda su errore di un job: lo registra e prosegue.
+2. Soglia di rinuncia (indicativamente 20% dei job falliti): oltre quella, abortire è giusto — la rete è davvero giù.
+3. Fase dettaglio: job falliti saltati, contati in `errors_count`, run chiusa `success`.
+4. Fase ricerca: se qualche pagina è andata persa, marcare la run **parziale** e saltare la rilevazione dei venduti per quel giro. È il punto che protegge dai falsi `sold`, e cambia il significato di una run — perciò merita una spec propria.
+5. Ripresa mirata dei job falliti a fine sweep, dato che il guasto tipico dura minuti.
+
+Il punto 4 è il vero contenuto di design: gli altri sono conseguenze.
