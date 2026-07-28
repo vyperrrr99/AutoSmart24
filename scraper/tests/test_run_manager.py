@@ -936,6 +936,101 @@ def test_process_detail_backlog_persists_new_structured_fields(db_session):
     assert listing.dealer_id is None
 
 
+def test_run_brand_sweep_excludes_sold_candidates_from_detail_backlog(db_session):
+    """Finding 1 regression (final review, 2026-07-28): a listing that looked
+    removed on the first missing-ids pass is still status='active' and
+    detail_scraped=False until the confirmation pass writes it minutes later.
+    Without exclude_ids, process_detail_backlog's own query ('active' AND
+    NOT detail_scraped) picks the same candidate up in between and fetches
+    its detail page a spurious third time -- and, in the id-reuse case,
+    would overwrite the row with a different car's data. Only two fetches
+    (first pass + confirmation) must occur."""
+    db_session.add(_existing_listing("cand-1", 10000, detail_scraped=False))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())  # cand-1 never appears in search results this sweep
+
+    fetch_calls: list[str] = []
+
+    def fake_fetch_detail(client, url):
+        fetch_calls.append(url)
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    cand_url = "https://www.autoscout24.it/annunci/cand-1"
+    assert fetch_calls.count(cand_url) == 2
+    assert run.sold_detected == 1
+
+
+def test_run_brand_sweep_logs_confirmed_sale_as_explicit_removal(db_session):
+    """Finding 2: a confirmed sale must be logged, and an explicit removal
+    (result.sold=True, e.g. 404/410) must be distinguishable in that log
+    from a brand-mismatch inference."""
+    db_session.add(_existing_listing("sold-explicit-1", 10000))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.sold_detected == 1
+    events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
+    sold_events = [e for e in events if "sold-explicit-1" in e.message and "sold" in e.message.lower()]
+    assert len(sold_events) == 1
+    assert "brand mismatch" not in sold_events[0].message.lower()
+
+
+def test_run_brand_sweep_logs_confirmed_sale_as_brand_mismatch(db_session):
+    """Finding 2: the other ground for a confirmed sale -- looks_removed
+    inferring removal from a brand mismatch rather than an explicit
+    result.sold -- must be logged distinctly so a systematic brand-parsing
+    drift shows up as a spike of brand-mismatch sales before it becomes 139
+    rows, per the reviewer's stated exposure."""
+    db_session.add(_existing_listing("sold-mismatch-1", 10000))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        return iter(())
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data={"brand": "Lancia"})
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.sold_detected == 1
+    events = db_session.query(ScrapeEvent).filter_by(brand="Fiat").all()
+    sold_events = [e for e in events if "sold-mismatch-1" in e.message and "sold" in e.message.lower()]
+    assert len(sold_events) == 1
+    assert "brand mismatch" in sold_events[0].message.lower()
+
+
+def test_run_brand_sweep_backlog_removed_reports_increment_errors_count(db_session):
+    """Finding 3: a repeat of the id-reuse incident -- the backlog's detail
+    fetch reporting 'removed' for listings the search just showed present --
+    must leave a visible trace in run.errors_count, the dashboard's only
+    monitoring channel, instead of finishing status='success',
+    errors_count=0 as if nothing happened."""
+    db_session.add(_existing_listing("backlog-removed-1", 10000, detail_scraped=False))
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _fake_snippet("backlog-removed-1", 10000)
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=fake_fetch_detail)
+
+    assert run.status == "success"
+    assert run.errors_count > 0
+
+
 def test_process_detail_backlog_upserts_dealer_and_links_listing(db_session):
     db_session.add(_existing_listing("detail-dealer-1", 10000, detail_scraped=False))
     db_session.commit()

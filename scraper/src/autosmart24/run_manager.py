@@ -415,11 +415,26 @@ def run_brand_sweep(
             run.phase = "detail"
             run.search_finished_at = _now()
             session.commit()
+            # sold_candidates are still status='active' and detail_scraped=False
+            # at this point -- the confirmation pass below hasn't run yet -- so
+            # without this exclusion the backlog's own query would pick them
+            # back up and detail-fetch them a spurious third time this sweep.
+            # Worse, on an id-reuse redirect the backlog only checks
+            # result.sold, not looks_removed's brand comparison, so it would
+            # write a different car's fields onto this row before the
+            # confirmation pass marks it sold at that foreign price.
             backlog_removed_reports = process_detail_backlog(
                 session, client_factory, brand, run,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
+                exclude_ids=set(sold_candidates),
             )
+            # A backlog row reporting removal is the same class of anomaly as
+            # the missing-path one above (line ~401): unlike a genuine sale it
+            # gets no other counter, so without this a repeat of the incident
+            # would finish status="success", errors_count=0 -- invisible on
+            # the dashboard, this project's only monitoring channel.
+            run.errors_count += backlog_removed_reports
 
         # Second pass: re-check every candidate. Minutes have gone by since the
         # first check, so a brief site failure cannot fool both. Only listings
@@ -442,6 +457,24 @@ def run_brand_sweep(
                         row.status = "sold"
                         row.sold_at = confirm_now
                         sold_count += 1
+                        # looks_removed is a bool and does not say which of
+                        # its two grounds fired; result.sold directly tells us
+                        # the difference. An explicit removal (404/410, or a
+                        # status other than Active) is site-reported fact. A
+                        # brand mismatch is a deterministic *inference* that
+                        # both confirmation checks are equally blind to: if a
+                        # detail page's brand ever systematically diverges
+                        # from the stored Listing.brand, every missing listing
+                        # of that brand gets confirmed sold this way. Logging
+                        # the ground separately means a drift shows up as a
+                        # spike of brand-mismatch sales before it becomes 139
+                        # rows.
+                        ground = "explicit removal" if result.sold else "brand mismatch"
+                        _log_event(
+                            session, run, "info",
+                            f"Listing {listing_id} confirmed sold ({ground})",
+                            url=row.url,
+                        )
                     else:
                         # Removed on the first check, alive on the second: the
                         # site was answering badly. Exactly the case that
