@@ -27,8 +27,15 @@ MAX_MISSING_FRACTION = 0.05
 
 @dataclass(frozen=True)
 class CoverageVerdict:
+    """Decision about whether sold detection may run.
+
+    estimated_missing: int | None
+        A lost page can be estimated at PAGE_SIZE listings; a lost model cannot
+        be estimated at all (returns None). A None value signals "unknown" to
+        callers rather than an apparently confident but wrong zero.
+    """
     can_detect_sales: bool
-    estimated_missing: int
+    estimated_missing: int | None
     reason: str
 
 
@@ -41,7 +48,7 @@ def assess_coverage(lost_models: int, lost_pages: int, listings_seen: int) -> Co
         # listings and nothing on hand narrows it down.
         return CoverageVerdict(
             can_detect_sales=False,
-            estimated_missing=estimated_missing,
+            estimated_missing=None,
             reason=f"{lost_models} modelli non recuperati: dimensione del buco non stimabile",
         )
 

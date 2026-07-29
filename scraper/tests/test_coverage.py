@@ -40,6 +40,8 @@ def test_a_lost_model_suppresses_detection_whatever_the_page_count():
         v = assess_coverage(lost_models=1, lost_pages=pages, listings_seen=1_000_000)
         assert v.can_detect_sales is False
         assert "modell" in v.reason.lower()
+        # The size of the hole is not estimable when a model is lost.
+        assert v.estimated_missing is None
 
 
 def test_nothing_seen_and_something_lost_suppresses_detection():
