@@ -291,3 +291,71 @@ def test_run_fn_halts_the_queue_when_a_sweep_reports_blocked(monkeypatch, db_ses
         assert "Fiat" in app_module.queue_controller.state().reason
     finally:
         app_module.queue_controller.resume()
+
+
+# --- requeue on error/partial -------------------------------------------
+
+
+class _FakeRun:
+    def __init__(self, status: str):
+        self.status = status
+
+
+@pytest.fixture()
+def requeue_probe(imported_app_module, monkeypatch):
+    """Runs _run_fn against a stubbed sweep and records any job it schedules."""
+    from autosmart24.db.session import init_db
+
+    module = imported_app_module
+    # _run_fn queries tracked_brands for the year filter before calling the
+    # (stubbed) sweep; the fresh in-memory engine from imported_app_module
+    # has no schema yet.
+    init_db(module.engine)
+    added: list[dict] = []
+
+    def fake_add_job(fn, **kwargs):
+        added.append(kwargs)
+
+    monkeypatch.setattr(module.scheduler.scheduler, "add_job", fake_add_job)
+    # The guard is process-global; a leftover entry would make _run_fn return
+    # early and every assertion below would pass for the wrong reason.
+    module.run_guard.release("fiat")
+
+    def run_with(status: str, is_retry: bool = False):
+        added.clear()
+        monkeypatch.setattr(module, "run_brand_sweep", lambda *a, **k: _FakeRun(status))
+        module._run_fn(BrandConfig(slug="fiat", display_name="Fiat", make_id=31), is_retry=is_retry)
+        return added
+
+    return run_with
+
+
+def test_a_failed_sweep_is_requeued_once_at_the_back_of_the_queue(requeue_probe):
+    """The executor has a single worker, so a date-triggered job lands behind
+    everything already submitted -- hours later, by which time a transient
+    network fault has resolved. Fiat proved it on 29/07: failed at 15:12,
+    recovered at 18:30 with 1,267 sales detected."""
+    added = requeue_probe("error")
+    assert len(added) == 1
+    assert added[0]["trigger"] == "date"
+    assert added[0]["kwargs"] == {"is_retry": True}
+
+
+def test_a_partial_sweep_is_requeued(requeue_probe):
+    """partial means the run did not evaluate sales -- its main job undone."""
+    assert len(requeue_probe("partial")) == 1
+
+
+def test_a_retry_that_fails_again_is_not_requeued(requeue_probe):
+    """Audi failed identically five times on the same listing. A deterministic
+    fault does not resolve by repetition, and a second retry only burns time."""
+    assert requeue_probe("error", is_retry=True) == []
+
+
+def test_a_blocked_sweep_is_never_requeued(requeue_probe):
+    """Pressing on after a block lengthens the block."""
+    assert requeue_probe("blocked") == []
+
+
+def test_a_successful_sweep_is_not_requeued(requeue_probe):
+    assert requeue_probe("success") == []

@@ -70,7 +70,7 @@ run_guard = BrandRunGuard()
 queue_controller = QueueController()
 
 
-def _run_fn(brand: BrandConfig) -> None:
+def _run_fn(brand: BrandConfig, is_retry: bool = False) -> None:
     if queue_controller.is_halted():
         # Exit before opening a client: with the queue halted after a block,
         # every request we skip is one that would deepen the block.
@@ -108,6 +108,20 @@ def _run_fn(brand: BrandConfig) -> None:
             )
             if run is not None and run.status == "blocked":
                 queue_controller.halt(f"blocco rilevato su {brand.display_name}")
+            elif run is not None and run.status in ("error", "partial") and not is_retry:
+                # Back of the queue, not immediately: the executor has a single
+                # worker, so a date-triggered job runs after everything already
+                # submitted -- hours, by which time a transient network fault
+                # has cleared. Once only: a deterministic fault fails identically
+                # every time, as Audi demonstrated five times on one listing.
+                scheduler.scheduler.add_job(
+                    _run_fn, args=[brand], kwargs={"is_retry": True}, trigger="date",
+                    id=f"retry-{brand.slug}-{int(time.time())}",
+                )
+                logger.warning(
+                    "Sweep for %s ended %s; requeued once at the back of the queue",
+                    brand.slug, run.status,
+                )
         finally:
             session.close()
     finally:
