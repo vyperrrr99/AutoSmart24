@@ -312,6 +312,11 @@ def requeue_probe(imported_app_module, monkeypatch):
     # has no schema yet.
     init_db(module.engine)
     added: list[dict] = []
+    # Recorded so "nothing was requeued" assertions below can be paired with
+    # "and the sweep actually ran" -- otherwise they'd pass the same way if
+    # _run_fn exited early (dirty run_guard, halted queue_controller) without
+    # ever reaching the sweep, which is not the behaviour under test.
+    sweep_calls: list[str] = []
 
     def fake_add_job(fn, **kwargs):
         added.append(kwargs)
@@ -323,10 +328,16 @@ def requeue_probe(imported_app_module, monkeypatch):
 
     def run_with(status: str, is_retry: bool = False):
         added.clear()
-        monkeypatch.setattr(module, "run_brand_sweep", lambda *a, **k: _FakeRun(status))
+
+        def fake_sweep(*a, **k):
+            sweep_calls.append(status)
+            return _FakeRun(status)
+
+        monkeypatch.setattr(module, "run_brand_sweep", fake_sweep)
         module._run_fn(BrandConfig(slug="fiat", display_name="Fiat", make_id=31), is_retry=is_retry)
         return added
 
+    run_with.sweep_calls = sweep_calls
     return run_with
 
 
@@ -350,12 +361,17 @@ def test_a_retry_that_fails_again_is_not_requeued(requeue_probe):
     """Audi failed identically five times on the same listing. A deterministic
     fault does not resolve by repetition, and a second retry only burns time."""
     assert requeue_probe("error", is_retry=True) == []
+    # Must be "the sweep ran and correctly declined to requeue," not
+    # "_run_fn exited before the sweep" -- both look like added == [].
+    assert requeue_probe.sweep_calls == ["error"]
 
 
 def test_a_blocked_sweep_is_never_requeued(requeue_probe):
     """Pressing on after a block lengthens the block."""
     assert requeue_probe("blocked") == []
+    assert requeue_probe.sweep_calls == ["blocked"]
 
 
 def test_a_successful_sweep_is_not_requeued(requeue_probe):
     assert requeue_probe("success") == []
+    assert requeue_probe.sweep_calls == ["success"]

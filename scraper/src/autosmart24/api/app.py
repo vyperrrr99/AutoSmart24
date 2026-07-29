@@ -114,9 +114,14 @@ def _run_fn(brand: BrandConfig, is_retry: bool = False) -> None:
                 # submitted -- hours, by which time a transient network fault
                 # has cleared. Once only: a deterministic fault fails identically
                 # every time, as Audi demonstrated five times on one listing.
+                # Nanosecond resolution, not replace_existing: two failures of
+                # the same brand landing in the same wall-clock second (e.g.
+                # a manual retry that fails fast) must each get their own
+                # retry job, not silently collapse into one via a
+                # ConflictingIdError-avoiding overwrite.
                 scheduler.scheduler.add_job(
                     _run_fn, args=[brand], kwargs={"is_retry": True}, trigger="date",
-                    id=f"retry-{brand.slug}-{int(time.time())}",
+                    id=f"retry-{brand.slug}-{time.time_ns()}",
                 )
                 logger.warning(
                     "Sweep for %s ended %s; requeued once at the back of the queue",
