@@ -225,7 +225,13 @@ def test_a_block_during_the_confirmation_pass_leaves_unreached_candidates_active
 
 
 def _seed_active_listing(session, listing_id: str, *, brand: str = "Fiat") -> None:
-    session.add(_listing(listing_id, brand=brand))
+    # detail_scraped=True: this represents a listing already known and
+    # enriched before this sweep. Without it the row would also be
+    # detail_scraped=False and the same-sweep backlog would pick it up and
+    # call fetch_detail_fn on it too, contaminating tests that key on which
+    # URLs the sold-detection passes (missing/confirm), as opposed to
+    # enrichment, actually fetched.
+    session.add(_listing(listing_id, brand=brand, detail_scraped=True))
     session.commit()
 
 
@@ -265,8 +271,17 @@ def test_a_lost_model_suppresses_sold_detection_and_marks_the_run_partial(db_ses
             report.lost_models.append(("modello-perso",))
         return iter([_snippet("still-here-1")])
 
+    calls: list[str] = []
+    gone_url = "https://www.autoscout24.it/annunci/gone-1"
+
     def fetch_detail_fn(client, url):
-        raise AssertionError("sold detection must not run when a model was lost")
+        # Serves the same-sweep backlog enriching "still-here-1" normally;
+        # what this test verifies is which URL is ABSENT from calls, not that
+        # calling raises -- run_worker_pool isolates any non-BlockedError
+        # exception per job (concurrency.py), so an AssertionError raised here
+        # would be silently swallowed and prove nothing.
+        calls.append(url)
+        return DetailResult(sold=False, data=_full_detail_data())
 
     run = run_brand_sweep(
         db_session, _client, BRAND, crawl_fn=crawl_fn,
@@ -276,6 +291,7 @@ def test_a_lost_model_suppresses_sold_detection_and_marks_the_run_partial(db_ses
     assert run.status == "partial"
     assert run.sold_detected == 0
     assert db_session.get(Listing, "gone-1").status == "active"
+    assert gone_url not in calls, "sold detection must not run when a model was lost"
 
 
 def test_a_small_page_gap_still_runs_sold_detection_and_the_run_is_success(db_session):
@@ -311,6 +327,11 @@ def test_a_small_page_gap_still_runs_sold_detection_and_the_run_is_success(db_se
     assert db_session.get(Listing, "gone-1").status == "sold"
     assert len(calls) == 2, "one check plus one confirmation"
 
+    messages = [e.message for e in db_session.query(ScrapeEvent).all()]
+    assert any("buco stimato" in m.lower() for m in messages), (
+        "a success run with a sub-threshold gap must still record that gap"
+    )
+
 
 def test_a_large_page_gap_suppresses_sold_detection(db_session):
     _seed_active_listing(db_session, "gone-1", brand="Fiat")
@@ -321,8 +342,15 @@ def test_a_large_page_gap_suppresses_sold_detection(db_session):
             report.lost_pages.extend((1, None, None, p) for p in range(2, 40))
         return iter([_snippet(f"seen-{i}") for i in range(100)])
 
+    calls: list[str] = []
+    gone_url = "https://www.autoscout24.it/annunci/gone-1"
+
     def fetch_detail_fn(client, url):
-        raise AssertionError("sold detection must not run over the threshold")
+        # Same reasoning as the lost-model test above: record and check the
+        # URL, don't rely on an exception that run_worker_pool would isolate
+        # and discard unread.
+        calls.append(url)
+        return DetailResult(sold=False, data=_full_detail_data())
 
     run = run_brand_sweep(
         db_session, _client, BRAND, crawl_fn=crawl_fn,
@@ -331,6 +359,31 @@ def test_a_large_page_gap_suppresses_sold_detection(db_session):
 
     assert run.status == "partial"
     assert db_session.get(Listing, "gone-1").status == "active"
+    assert gone_url not in calls, "sold detection must not run over the threshold"
+
+
+def test_a_partial_run_counts_backlog_removed_reports_as_errors(db_session):
+    """The gate branch still runs the detail-enrichment backlog (binding
+    constraint), and a backlog row reporting removal there is the same class
+    of anomaly as the equivalent counter on the success path -- it must not
+    vanish into a run that otherwise looks clean just because the run took
+    the partial branch."""
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_models.append(("modello-perso",))
+        return iter([_snippet("new-1")])
+
+    def fetch_detail_fn(client, url):
+        return DetailResult(sold=True)  # backlog reads this as "reported removed"
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert run.status == "partial"
+    assert run.errors_count >= 1, "a backlog removal report must count as an anomaly on a partial run too"
 
 
 def test_a_partial_run_still_keeps_the_listings_it_collected(db_session):
@@ -391,12 +444,20 @@ def test_a_gap_under_threshold_logs_one_summary_not_one_event_per_listing(db_ses
         fetch_detail_fn=fetch_detail_fn, concurrency=1,
     )
 
+    events = db_session.query(ScrapeEvent).all()
     per_listing = [
-        e for e in db_session.query(ScrapeEvent).all()
+        e for e in events
         if "non trovato nella scansione" in e.message.lower()
         or "not found in sweep" in e.message.lower()
     ]
-    assert len(per_listing) <= 1, f"expected a single summary, got {len(per_listing)}"
+    assert per_listing == [], f"expected no per-listing events, got {len(per_listing)}"
+
+    summaries = [e for e in events if "annunci non trovati nella scansione" in e.message.lower()]
+    # Exactly one, not "at most one": an assertion of "<= 1" is satisfied by
+    # deleting the summary entirely, which would leave the missing-but-alive
+    # gap completely unrecorded.
+    assert len(summaries) == 1, f"expected exactly one summary, got {len(summaries)}"
+    assert "40" in summaries[0].message, "the summary must record how many listings were affected"
 
 
 def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
@@ -407,15 +468,20 @@ def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
     refactor breaks silently, and the failure mode is inventing sales.
     """
     _seed_active_listing(db_session, "gone-1", brand="Fiat")
-    calls = {"n": 0}
+    gone_url = "https://www.autoscout24.it/annunci/gone-1"
+    calls: list[str] = []
 
     def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
                  session_refresh_requests=30, report=None):
         return iter([_snippet(f"seen-{i}") for i in range(10)])
 
     def fetch_detail_fn(client, url):
-        calls["n"] += 1
-        if calls["n"] == 1:
+        if url != gone_url:
+            # Same-sweep backlog enriching the 10 freshly-crawled listings --
+            # unrelated to gone-1's sold-detection check/confirmation.
+            return DetailResult(sold=False, data=_full_detail_data())
+        calls.append(url)
+        if len(calls) == 1:
             return DetailResult(sold=True)   # first check: looks removed
         raise TimeoutError("timed out")      # confirmation: we could not ask
 
@@ -427,6 +493,11 @@ def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
     assert db_session.get(Listing, "gone-1").status == "active"
     assert db_session.get(Listing, "gone-1").sold_at is None
     assert run.sold_detected == 0
+    # Negative assertions alone would pass identically if the candidate were
+    # never collected or the confirmation pass never ran at all. This proves
+    # the confirmation was actually attempted and its failure is what left
+    # the listing active, not the absence of an attempt.
+    assert calls.count(gone_url) == 2, "first check plus a confirmation attempt"
 
 
 def test_a_block_still_stops_the_sweep_in_each_phase(db_session):

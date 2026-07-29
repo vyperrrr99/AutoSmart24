@@ -395,11 +395,16 @@ def run_brand_sweep(
                 f"Rilevazione vendite saltata, scansione incompleta: {coverage.reason}",
             )
             session.commit()
-            process_detail_backlog(
+            backlog_removed_reports = process_detail_backlog(
                 session, client_factory, brand, run,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
             )
+            # Same anomaly class as the success path's equivalent counter
+            # below: a backlog row reporting removal here is diagnostic, not
+            # a sale, but it must still surface as an error count rather than
+            # vanish into a run that otherwise looks clean.
+            run.errors_count += backlog_removed_reports
             run.listings_seen = listings_seen
             run.new_listings = len(new_ids)
             run.price_changes = price_changes
@@ -410,6 +415,18 @@ def run_brand_sweep(
             run.finished_at = _now()
             session.commit()
             return run
+
+        if coverage.estimated_missing:
+            # This run closes "success" below and will run sold detection --
+            # but it still had a real gap, just one under the threshold. That
+            # must leave a trace independent of whether any particular
+            # listing ends up missing-but-alive (it may be zero, or every
+            # missing listing may turn out genuinely removed): "success" must
+            # not read as "the search phase was complete".
+            _log_event(
+                session, run, "info",
+                f"Scansione con copertura parziale ma sotto soglia: {coverage.reason}",
+            )
 
         missing_ids = set(active_db_prices.keys()) - seen_ids
         now = _now()
@@ -438,12 +455,15 @@ def run_brand_sweep(
                 else:
                     missing_but_alive += 1
                     run.errors_count += 1
-                    # With a known coverage gap (estimated_missing == 0) this
-                    # path is the expected outcome for every listing the crawl
+                    # estimated_missing == 0 means the coverage gap is known
+                    # to be zero, so a listing missing from the search yet
+                    # alive on its own detail page has no explanation in a
+                    # lost page or model -- it is logged individually because
+                    # it genuinely is an anomaly. When the gap is nonzero this
+                    # is the expected outcome for every listing the crawl
                     # missed, not an anomaly: one event each would read as a
                     # serious fault on the dashboard, this project's only
-                    # monitoring channel. When the gap is unknown or nonzero the
-                    # summary below covers it instead.
+                    # monitoring channel -- the summary below covers it instead.
                     if coverage.estimated_missing == 0:
                         _log_event(
                             session, run, "warning",
