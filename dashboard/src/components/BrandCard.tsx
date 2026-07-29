@@ -14,6 +14,10 @@ function statusLabel(brand: BrandStatusOut): string {
   if (brand.last_run?.status === "blocked") return "Bloccato";
   if (brand.last_run?.status === "error") return "Errore";
   if (brand.last_run?.status === "running") return "In esecuzione";
+  // partial: listings were collected but the crawl didn't cover enough ground
+  // to tell "still active, absent from the site" from "not looked at yet", so
+  // the sold check was skipped. Must not fall through to "Attivo" below.
+  if (brand.last_run?.status === "partial") return "Parziale";
   return "Attivo";
 }
 
@@ -32,6 +36,12 @@ export function BrandCard({ brand, onPause, onResume, onRunNow, onSelect }: Bran
           etaSeconds={null}
           etaIsFallback={false}
         />
+      )}
+      {brand.last_run?.status === "partial" && (
+        // A label alone leaves the operator guessing at what "partial" cost:
+        // spell out that this run did not evaluate sales, so no one reads
+        // this run's sold_detected (likely 0) as "nothing sold this time".
+        <p className="status-note">Scansione incompleta: vendite non valutate in questo run.</p>
       )}
       {brand.last_run && (
         <ul>

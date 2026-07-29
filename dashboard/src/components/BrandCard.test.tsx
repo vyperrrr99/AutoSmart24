@@ -51,6 +51,38 @@ describe("BrandCard", () => {
     expect(screen.queryByTestId("run-progress-bar")).not.toBeInTheDocument();
   });
 
+  it("shows Parziale status when last run status is partial", () => {
+    const partialBrand = { ...brand, last_run: { ...brand.last_run!, status: "partial" } };
+    render(<BrandCard brand={partialBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText(/parziale/i)).toBeInTheDocument();
+  });
+
+  it("does not present a partial run as a successful one", () => {
+    // Pre-fix statusLabel fell through to "Attivo" for any status it didn't
+    // recognise, so a run that skipped the sold check looked healthy.
+    const partialBrand = { ...brand, last_run: { ...brand.last_run!, status: "partial" } };
+    render(<BrandCard brand={partialBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.queryByText("Attivo")).not.toBeInTheDocument();
+  });
+
+  it("gives the Parziale badge a style distinct from Errore", () => {
+    const partialBrand = { ...brand, last_run: { ...brand.last_run!, status: "partial" } };
+    const { unmount } = render(
+      <BrandCard brand={partialBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />,
+    );
+    const partialClass = screen.getByText(/parziale/i).className;
+    unmount();
+    const erroredBrand = { ...brand, last_run: { ...brand.last_run!, status: "error", errors_count: 1 } };
+    render(<BrandCard brand={erroredBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText(/errore/i).className).not.toBe(partialClass);
+  });
+
+  it("explains that sales were not evaluated when a run is partial", () => {
+    const partialBrand = { ...brand, last_run: { ...brand.last_run!, status: "partial" } };
+    render(<BrandCard brand={partialBrand} onPause={vi.fn()} onResume={vi.fn()} onRunNow={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText(/vendite non valutate/i)).toBeInTheDocument();
+  });
+
   it("shows a progress bar with detail-phase counts while a run is in progress", () => {
     const runningBrand = {
       ...brand,

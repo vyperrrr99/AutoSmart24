@@ -35,6 +35,10 @@ body {
 .status-bloccato { background: #7f1d1d; }
 .status-in-esecuzione { background: #1e3a8a; }
 .status-errore { background: #991b1b; }
+/* Distinct from both .status-attivo (nothing to check) and .status-errore
+   (needs a human): a partial run requeues itself automatically, so violet
+   reads as "different kind of state", not "something is broken". */
+.status-parziale { background: #5b21b6; }
 
 .view-nav {
   display: flex;

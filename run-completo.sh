@@ -79,7 +79,7 @@ for BRAND in $QUEUE; do
   while true; do
     S=$(status_of "$BRAND")
     case "$S" in
-      success|error|blocked)
+      success|error|blocked|partial)
         echo "FINE  $(report_line "$BRAND")  $(date '+%H:%M:%S')"
         N=$(suspect_count)
         if [ "${N:-0}" != "0" ]; then
@@ -91,6 +91,9 @@ for BRAND in $QUEUE; do
         fi
         echo "  regressione vendite: 0 sospetti"
         [ "$S" = "blocked" ] && { echo "!! BLOCCO — mi fermo. Riprendi con: curl -X POST $API/queue/resume"; exit 1; }
+        # partial requeues itself — not a fault to stop the giro for, but
+        # silent here would mean nobody notices the sold check was skipped.
+        [ "$S" = "partial" ] && echo "  ATTENZIONE: scansione incompleta, vendite non valutate per $BRAND"
         break ;;
       "") echo "   $BRAND · API non raggiungibile · $(date '+%H:%M:%S')" ;;
       *)  echo "   $BRAND · $(progress) · $(date '+%H:%M:%S')" ;;

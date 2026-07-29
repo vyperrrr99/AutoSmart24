@@ -65,7 +65,7 @@ run_once() {
   while true; do
     S=$(status_of "$1")
     case "$S" in
-      success|error|blocked) echo "$S"; return ;;
+      success|error|blocked|partial) echo "$S"; return ;;
       "") echo "   $1 · API non raggiungibile · $(date '+%H:%M:%S')" >&2 ;;
       *)  echo "   $1 · $(progress) · $(date '+%H:%M:%S')" >&2 ;;
     esac
@@ -90,6 +90,9 @@ for BRAND in $QUEUE; do
   echo "  regressione vendite: 0 sospetti"
   [ "$S" = "blocked" ] && { echo "!! BLOCCO. Riprendi con: curl -X POST $API/queue/resume"; exit 1; }
   [ "$S" = "error" ] && echo "  !! $BRAND fallita anche al secondo tentativo"
+  # partial requeues itself — not the transient failure this script retries
+  # for, but silent here would hide that the sold check never ran.
+  [ "$S" = "partial" ] && echo "  ATTENZIONE: scansione incompleta, vendite non valutate per $BRAND"
 done
 
 echo
