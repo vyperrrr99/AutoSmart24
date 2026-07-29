@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 from autosmart24.config import MAX_RESULTS_PER_QUERY
-from autosmart24.scraping.concurrency import run_worker_pool
+from autosmart24.scraping.concurrency import JobFailure, run_worker_pool
 from autosmart24.scraping.http_client import RateLimitedClient
 from autosmart24.scraping.next_data import extract_next_data
 from autosmart24.scraping.search_query import build_search_url
@@ -27,6 +27,24 @@ class QueryUnit:
     year_from: int | None
     year_to: int | None
     number_of_pages: int
+
+
+@dataclass
+class CrawlReport:
+    """What the crawl could not fetch, kept separate by severity.
+
+    A lost page is worth roughly PAGE_SIZE listings and can be estimated. A
+    lost model was dropped while learning how many pages it has, so its size
+    is unknown and no estimate is possible -- which is why the two are not
+    merged into a single counter.
+    """
+
+    lost_models: list = field(default_factory=list)
+    lost_pages: list = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return not self.lost_models and not self.lost_pages
 
 
 def fetch_page_data(client: RateLimitedClient, url: str) -> dict:
@@ -98,6 +116,7 @@ def crawl_brand(
     year_from: int | None = None,
     concurrency: int = 1,
     session_refresh_requests: int = 30,
+    report: CrawlReport | None = None,
 ) -> Iterator[dict]:
     bootstrap_client = client_factory()
     try:
@@ -108,24 +127,52 @@ def crawl_brand(
     def _discovery_worker(model: ModelInfo, client: RateLimitedClient) -> list[tuple[QueryUnit, list[dict]]]:
         return _discover_model_units(model, client, brand_slug, make_id, year_from)
 
-    # Phase 1: probe every model in parallel. This loop fully drains before
-    # phase 2 starts, so `units` is complete when the page job list is built.
     units: list[QueryUnit] = []
+    discovery_failures: list[JobFailure] = []
     for unit, listings in run_worker_pool(
-        models, _discovery_worker, client_factory, concurrency, session_refresh_requests
+        models, _discovery_worker, client_factory, concurrency, session_refresh_requests,
+        failures=discovery_failures,
     ):
         units.append(unit)
         yield from listings
 
-    # Phase 2: fetch every remaining page (2..N) of every unit in parallel.
-    page_jobs: list[tuple[int, int | None, int | None, int]] = []
-    for unit in units:
-        for page in range(2, unit.number_of_pages + 1):
-            page_jobs.append((unit.model_id, unit.year_from, unit.year_to, page))
+    # Retry the lost models before the page list is built: a model recovered
+    # here still contributes its pages below, whereas one recovered afterwards
+    # would silently contribute only its first page. Minutes have passed since
+    # the first attempt, which is what makes a retry worth making at all.
+    lost_models: list[JobFailure] = []
+    if discovery_failures:
+        retry_models = [f.job for f in discovery_failures]
+        for unit, listings in run_worker_pool(
+            retry_models, _discovery_worker, client_factory, concurrency, session_refresh_requests,
+            failures=lost_models,
+        ):
+            units.append(unit)
+            yield from listings
 
     def _page_worker(job: tuple[int, int | None, int | None, int], client: RateLimitedClient) -> list[dict]:
         model_id, yf, yt, page = job
         url = build_search_url(brand_slug, page=page, make_id=make_id, model_id=model_id, year_from=yf, year_to=yt)
         return list(_iter_listings_from_page(fetch_page_data(client, url)))
 
-    yield from run_worker_pool(page_jobs, _page_worker, client_factory, concurrency, session_refresh_requests)
+    page_jobs: list[tuple[int, int | None, int | None, int]] = []
+    for unit in units:
+        for page in range(2, unit.number_of_pages + 1):
+            page_jobs.append((unit.model_id, unit.year_from, unit.year_to, page))
+
+    page_failures: list[JobFailure] = []
+    yield from run_worker_pool(
+        page_jobs, _page_worker, client_factory, concurrency, session_refresh_requests,
+        failures=page_failures,
+    )
+
+    lost_pages: list[JobFailure] = []
+    if page_failures:
+        yield from run_worker_pool(
+            [f.job for f in page_failures], _page_worker, client_factory,
+            concurrency, session_refresh_requests, failures=lost_pages,
+        )
+
+    if report is not None:
+        report.lost_models.extend(f.job for f in lost_models)
+        report.lost_pages.extend(f.job for f in lost_pages)

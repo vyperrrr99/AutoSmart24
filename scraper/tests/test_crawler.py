@@ -5,9 +5,13 @@ import httpx
 import pytest
 import respx
 
-from autosmart24.scraping.crawler import crawl_brand
+from autosmart24.scraping.crawler import CrawlReport, ModelInfo, QueryUnit, crawl_brand
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 from autosmart24.scraping.search_query import build_search_url
+
+
+def _client_factory() -> RateLimitedClient:
+    return RateLimitedClient(min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None)
 
 
 def _next_data_html(page_props: dict) -> str:
@@ -278,3 +282,103 @@ def test_crawl_brand_keeps_the_year_floor_on_phase_two_page_urls():
 
     assert set(requested_pages) == {1, 2, 3}, f"expected pages 1-3, got {sorted(requested_pages)}"
     assert all(v == "2021" for v in requested_pages.values()), requested_pages
+
+
+def test_crawl_report_is_complete_when_nothing_was_lost():
+    assert CrawlReport().complete is True
+    assert CrawlReport(lost_pages=[("a",)]).complete is False
+    assert CrawlReport(lost_models=[("m",)]).complete is False
+
+
+def test_crawl_brand_recovers_a_discovery_that_failed_the_first_time(monkeypatch):
+    """A model lost in discovery costs the whole model, so it is retried first
+    and its pages must then be fetched like any other model's."""
+    attempts: dict[str, int] = {}
+
+    def fake_discover(model, client, brand_slug, make_id, year_from):
+        attempts[model.model_id] = attempts.get(model.model_id, 0) + 1
+        if model.model_id == 2 and attempts[2] == 1:
+            raise TimeoutError("timed out")
+        unit = QueryUnit(model.model_id, None, None, 2)
+        return [(unit, [{"id": f"m{model.model_id}-p1"}])]
+
+    def fake_page(client, url):
+        return {"listings": []}
+
+    monkeypatch.setattr("autosmart24.scraping.crawler._discover_model_units", fake_discover)
+    monkeypatch.setattr("autosmart24.scraping.crawler.discover_models",
+                        lambda c, s, m: [ModelInfo(1, "one"), ModelInfo(2, "two")])
+    monkeypatch.setattr("autosmart24.scraping.crawler.fetch_page_data",
+                        lambda client, url: {"listings": [{"id": url}]})
+    monkeypatch.setattr("autosmart24.scraping.crawler.map_snippet_listing", lambda raw: raw)
+
+    report = CrawlReport()
+    out = list(crawl_brand(_client_factory, "brand", 7, concurrency=1,
+                           session_refresh_requests=100, report=report))
+
+    assert attempts[2] == 2, "the failed discovery must be retried exactly once"
+    assert report.complete is True
+    ids = {item["id"] for item in out if "id" in item}
+    assert "m2-p1" in ids, "the recovered model's first page must be yielded"
+    # Model 1 also has number_of_pages=2, so a bare "page=2" substring check
+    # would pass even if model 2's own page 2 were never queued -- it must be
+    # tied to model 2's own mmmv marker (7|2||, urlencoded) to actually prove
+    # the recovered model's pages were queued, not just some other model's.
+    assert any("page=2" in str(item.get("id", "")) and "mmmv=7%7C2%7C%7C" in str(item.get("id", ""))
+               for item in out), \
+        "the recovered model's remaining pages must be fetched too"
+
+
+def test_crawl_brand_reports_a_discovery_it_could_not_recover(monkeypatch):
+    def always_fails(model, client, brand_slug, make_id, year_from):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("autosmart24.scraping.crawler._discover_model_units", always_fails)
+    monkeypatch.setattr("autosmart24.scraping.crawler.discover_models",
+                        lambda c, s, m: [ModelInfo(1, "one")])
+
+    report = CrawlReport()
+    out = list(crawl_brand(_client_factory, "brand", 7, concurrency=1,
+                           session_refresh_requests=100, report=report))
+
+    assert out == []
+    assert len(report.lost_models) == 1
+    assert report.lost_pages == []
+    assert report.complete is False
+
+
+def test_crawl_brand_reports_a_page_it_could_not_recover(monkeypatch):
+    def fake_discover(model, client, brand_slug, make_id, year_from):
+        return [(QueryUnit(model.model_id, None, None, 2), [])]
+
+    def failing_page(client, url):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("autosmart24.scraping.crawler._discover_model_units", fake_discover)
+    monkeypatch.setattr("autosmart24.scraping.crawler.discover_models",
+                        lambda c, s, m: [ModelInfo(1, "one")])
+    monkeypatch.setattr("autosmart24.scraping.crawler.fetch_page_data", failing_page)
+
+    report = CrawlReport()
+    list(crawl_brand(_client_factory, "brand", 7, concurrency=1,
+                     session_refresh_requests=100, report=report))
+
+    assert report.lost_models == []
+    assert len(report.lost_pages) == 1
+    assert report.complete is False
+
+
+@respx.mock
+def test_crawl_brand_works_without_a_report():
+    """The report is optional so existing callers and tests keep working."""
+    discovery_page_props = {
+        "numberOfResults": 0,
+        "numberOfPages": 0,
+        "listings": [],
+        "taxonomy": {"models": {"28": []}},
+    }
+    respx.get(build_search_url("fiat", page=1, make_id=28)).mock(
+        return_value=httpx.Response(200, text=_next_data_html(discovery_page_props))
+    )
+
+    assert list(crawl_brand(_client_factory, "fiat", 28, concurrency=1)) == []
