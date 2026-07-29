@@ -7,7 +7,8 @@
 # (Audi and Fiat, which arrive with ~13k listings still to enrich) land last
 # and the early brands give a clean read on the update rate.
 #
-# Opel is left out: it was updated on 28/07 at 14:12.
+# All 25 brands: Opel was skipped on the 29/07 pass because it had just been
+# updated, and is now two days stale like the rest.
 #
 # Per brand this records what the old runner could not — whether any sale it
 # declared carries the signature of the 28/07 incident, a listing marked sold
@@ -15,7 +16,7 @@
 # place that count must stay at zero; anything else means the fix is leaking
 # and the run should be stopped rather than left to fill the night.
 API=http://localhost:8001
-QUEUE="toyota nissan alfa-romeo hyundai land-rover kia skoda porsche cupra dacia mini mg volvo lancia \
+QUEUE="toyota nissan alfa-romeo hyundai land-rover kia skoda porsche cupra dacia mini mg volvo lancia opel \
        citroen renault jeep ford peugeot bmw mercedes-benz volkswagen audi fiat"
 PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
 
@@ -87,7 +88,7 @@ PY
 # it exists to guarantee the giro terminates, not to police the schedule.
 MAX_WAITS=120   # x 120s = 4 hours
 
-echo "=== giro completo avviato $(date '+%d/%m %H:%M:%S') — 24 marche ==="
+echo "=== giro completo avviato $(date '+%d/%m %H:%M:%S') — 25 marche ==="
 echo "    fix vendite deployato, immagine verificata prima dell'avvio"
 START_ALL=$(date +%s)
 SUSPECT_TOTAL=0
