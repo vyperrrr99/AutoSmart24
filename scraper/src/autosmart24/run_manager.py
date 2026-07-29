@@ -224,6 +224,13 @@ def run_brand_sweep(
     seen_ids: set[str] = set()
     new_ids: set[str] = set()
     relisted_ids: set[str] = set()
+    # Ids skipped because they collided with a DIFFERENT brand's row (see the
+    # existing_brand_by_id lookup below). Distinct from relisted_ids: those
+    # were written as an UPDATE to a pre-existing row, these were written
+    # nowhere at all, so folding them together would misreport a listing
+    # that does not exist in the database as "new" -- run.new_listings feeds
+    # the dashboard and the monitoring scripts' per-brand report line.
+    reused_ids: set[str] = set()
     listings_seen = 0
     price_changes = 0
 
@@ -287,6 +294,7 @@ def run_brand_sweep(
                         # deliberately accepts -- see the known-issue document
                         # for what a semantically complete fix would require.
                         run.errors_count += 1
+                        reused_ids.add(listing_id)
                         _log_event(
                             session, run, "warning",
                             f"Id {listing_id} già presente sotto la marca {existing_brand}: "
@@ -371,9 +379,12 @@ def run_brand_sweep(
 
                 seen_ids.update(batch_snippets.keys())
                 # relisted_ids are ids from diff.new_ids that were treated as
-                # UPDATEs to a pre-existing row above, not fresh inserts --
-                # they must not inflate new_ids/run.new_listings.
-                new_ids.update(diff.new_ids - relisted_ids)
+                # UPDATEs to a pre-existing row above, not fresh inserts;
+                # reused_ids were skipped entirely (a different brand already
+                # holds that id) and written nowhere -- neither must inflate
+                # new_ids/run.new_listings with a listing that does not exist
+                # in the database.
+                new_ids.update(diff.new_ids - relisted_ids - reused_ids)
                 listings_seen += len(batch_snippets)
                 price_changes += len(diff.price_changed)
 

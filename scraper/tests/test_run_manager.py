@@ -1104,6 +1104,9 @@ def test_run_brand_sweep_skips_a_listing_id_that_belongs_to_another_brand(db_ses
     stale = db_session.get(Listing, "reused-1")
     assert stale.brand == "Mercedes-Benz"
     assert stale.status == "sold"
+    # Nothing was written to the DB for "reused-1" -- it must not inflate the
+    # count of genuine new listings alongside "fresh-1".
+    assert run.new_listings == 1
 
 
 def test_run_brand_sweep_records_each_id_reuse_it_meets(db_session):
