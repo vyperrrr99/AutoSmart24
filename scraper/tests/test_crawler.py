@@ -284,10 +284,18 @@ def test_crawl_brand_keeps_the_year_floor_on_phase_two_page_urls():
     assert all(v == "2021" for v in requested_pages.values()), requested_pages
 
 
-def test_crawl_report_is_complete_when_nothing_was_lost():
-    assert CrawlReport().complete is True
-    assert CrawlReport(lost_pages=[("a",)]).complete is False
-    assert CrawlReport(lost_models=[("m",)]).complete is False
+def test_crawl_report_is_not_complete_when_freshly_constructed():
+    """A report only reflects reality once `crawl_brand` has actually
+    finished writing to it -- a fresh (or partially drained) report must read
+    as unknown, never as a clean crawl."""
+    assert CrawlReport().complete is False
+
+
+def test_crawl_report_is_complete_only_when_finished_and_nothing_was_lost():
+    assert CrawlReport(finished=True).complete is True
+    assert CrawlReport(finished=True, lost_pages=[("a",)]).complete is False
+    assert CrawlReport(finished=True, lost_models=[("m",)]).complete is False
+    assert CrawlReport(finished=False, lost_pages=[], lost_models=[]).complete is False
 
 
 def test_crawl_brand_recovers_a_discovery_that_failed_the_first_time(monkeypatch):
@@ -382,3 +390,29 @@ def test_crawl_brand_works_without_a_report():
     )
 
     assert list(crawl_brand(_client_factory, "fiat", 28, concurrency=1)) == []
+
+
+def test_crawl_brand_report_stays_incomplete_when_the_generator_is_abandoned(monkeypatch):
+    """A consumer that stops draining early (a `break`, an abandoned
+    generator) must not leave the report looking like a clean crawl: the
+    final block that populates it never runs, so `complete` must read False
+    on whatever partial state is left behind, not on an empty-looks-clean
+    default."""
+    def fake_discover(model, client, brand_slug, make_id, year_from):
+        unit = QueryUnit(model.model_id, None, None, 2)
+        return [(unit, [{"id": f"m{model.model_id}-p1"}])]
+
+    monkeypatch.setattr("autosmart24.scraping.crawler._discover_model_units", fake_discover)
+    monkeypatch.setattr("autosmart24.scraping.crawler.discover_models",
+                        lambda c, s, m: [ModelInfo(1, "one"), ModelInfo(2, "two")])
+    monkeypatch.setattr("autosmart24.scraping.crawler.fetch_page_data",
+                        lambda client, url: {"listings": [{"id": url}]})
+    monkeypatch.setattr("autosmart24.scraping.crawler.map_snippet_listing", lambda raw: raw)
+
+    report = CrawlReport()
+    gen = crawl_brand(_client_factory, "brand", 7, concurrency=1,
+                       session_refresh_requests=100, report=report)
+    next(gen)
+    gen.close()
+
+    assert report.complete is False

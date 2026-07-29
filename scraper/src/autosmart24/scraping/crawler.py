@@ -37,14 +37,24 @@ class CrawlReport:
     lost model was dropped while learning how many pages it has, so its size
     is unknown and no estimate is possible -- which is why the two are not
     merged into a single counter.
+
+    `finished` guards against reading a partial report as a clean one. The
+    lists are only populated once `crawl_brand` reaches its final block, so a
+    consumer that abandons the generator early (or one killed mid-flight by a
+    fatal `BlockedError`) leaves them empty -- which must not look the same as
+    a crawl that genuinely lost nothing. `complete` fails closed on this: an
+    unfinished crawl is never complete, whatever its lists contain, because
+    the caller deciding whether sold detection may run needs "we don't know"
+    to read as "no", not as "yes".
     """
 
     lost_models: list = field(default_factory=list)
     lost_pages: list = field(default_factory=list)
+    finished: bool = False
 
     @property
     def complete(self) -> bool:
-        return not self.lost_models and not self.lost_pages
+        return self.finished and not self.lost_models and not self.lost_pages
 
 
 def fetch_page_data(client: RateLimitedClient, url: str) -> dict:
@@ -176,3 +186,4 @@ def crawl_brand(
     if report is not None:
         report.lost_models.extend(f.job for f in lost_models)
         report.lost_pages.extend(f.job for f in lost_pages)
+        report.finished = True
