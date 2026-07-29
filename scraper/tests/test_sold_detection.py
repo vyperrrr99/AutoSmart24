@@ -222,3 +222,236 @@ def test_a_block_during_the_confirmation_pass_leaves_unreached_candidates_active
     assert sold[0].sold_at is not None
     assert len(active) == 1, "the candidate the pool never reached must stay active"
     assert active[0].sold_at is None
+
+
+def _seed_active_listing(session, listing_id: str, *, brand: str = "Fiat") -> None:
+    session.add(_listing(listing_id, brand=brand))
+    session.commit()
+
+
+def _full_detail_data(**overrides) -> dict:
+    """A fully-populated detail payload. Every listing crawl_fn returns lands
+    in the same-sweep detail-enrichment backlog (see
+    test_run_brand_sweep_fetches_detail_for_listings_new_in_this_same_sweep in
+    test_run_manager.py) -- process_detail_backlog indexes this dict by every
+    key unconditionally, so a stub fetch_detail_fn used anywhere a fresh
+    listing might reach the backlog needs the full shape, not just the field
+    a given test cares about."""
+    data = {
+        "price": None, "power_kw": None, "power_cv": None, "displacement_ccm": None,
+        "body_type": None, "body_color": None, "num_seats": None, "num_doors": None,
+        "num_previous_owners": None, "province": None, "latitude": None, "longitude": None,
+        "vat_exposed": None, "price_evaluation_category": None, "price_evaluation_median": None,
+        "created_at_source": None,
+        "had_accident": None, "has_full_service_history": None, "gears": None, "drive_train": None,
+        "cylinders": None, "weight_kg": None, "co2_emissions_g_km": None,
+        "fuel_consumption_combined": None, "fuel_consumption_urban": None, "fuel_consumption_extra_urban": None,
+        "emission_class": None, "upholstery": None, "upholstery_color": None,
+        "is_conditional_price": None, "interaction_count": None, "favorites_count": None,
+        "new_driver_suitable": None, "dealer": None,
+    }
+    data.update(overrides)
+    return data
+
+
+def test_a_lost_model_suppresses_sold_detection_and_marks_the_run_partial(db_session):
+    """The whole point: a listing absent from an incomplete crawl must not
+    even be considered for sale."""
+    _seed_active_listing(db_session, "gone-1", brand="Fiat")
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_models.append(("modello-perso",))
+        return iter([_snippet("still-here-1")])
+
+    def fetch_detail_fn(client, url):
+        raise AssertionError("sold detection must not run when a model was lost")
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert run.status == "partial"
+    assert run.sold_detected == 0
+    assert db_session.get(Listing, "gone-1").status == "active"
+
+
+def test_a_small_page_gap_still_runs_sold_detection_and_the_run_is_success(db_session):
+    """A gap under the threshold costs some wasted checks, not a whole cycle
+    of sale data."""
+    _seed_active_listing(db_session, "gone-1", brand="Fiat")
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_pages.append((1, None, None, 5))
+        return iter([_snippet(f"seen-{i}") for i in range(500)])
+
+    calls: list[str] = []
+    gone_url = "https://www.autoscout24.it/annunci/gone-1"
+
+    def fetch_detail_fn(client, url):
+        if url == gone_url:
+            calls.append(url)
+            return DetailResult(sold=True)
+        # One of the 500 freshly-crawled listings hitting the same-sweep
+        # detail-enrichment backlog -- unrelated to sold detection, so it
+        # must not count toward the check/confirmation tally below.
+        return DetailResult(sold=False, data=_full_detail_data())
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert run.status == "success"
+    assert run.sold_detected == 1
+    assert db_session.get(Listing, "gone-1").status == "sold"
+    assert len(calls) == 2, "one check plus one confirmation"
+
+
+def test_a_large_page_gap_suppresses_sold_detection(db_session):
+    _seed_active_listing(db_session, "gone-1", brand="Fiat")
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_pages.extend((1, None, None, p) for p in range(2, 40))
+        return iter([_snippet(f"seen-{i}") for i in range(100)])
+
+    def fetch_detail_fn(client, url):
+        raise AssertionError("sold detection must not run over the threshold")
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert run.status == "partial"
+    assert db_session.get(Listing, "gone-1").status == "active"
+
+
+def test_a_partial_run_still_keeps_the_listings_it_collected(db_session):
+    """Losing coverage must not lose data: the crawl's own work is committed."""
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_models.append(("modello-perso",))
+        return iter([_snippet("new-1"), _snippet("new-2")])
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=lambda c, u: DetailResult(sold=False, data=_full_detail_data()), concurrency=1,
+    )
+
+    assert run.status == "partial"
+    assert db_session.get(Listing, "new-1") is not None
+    assert db_session.get(Listing, "new-2") is not None
+
+
+def test_a_partial_run_records_why(db_session):
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_models.append(("modello-perso",))
+        return iter([])
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=lambda c, u: DetailResult(sold=False, data={}), concurrency=1,
+    )
+
+    messages = [e.message for e in db_session.query(ScrapeEvent).all()]
+    assert any("vendite" in m.lower() and "modell" in m.lower() for m in messages)
+
+
+def test_a_gap_under_threshold_logs_one_summary_not_one_event_per_listing(db_session):
+    """A near-threshold gap sends hundreds of listings down the 'missing but
+    alive' path. One event each would read as a serious fault on the only
+    monitoring channel this project has."""
+    for i in range(40):
+        _seed_active_listing(db_session, f"unseen-{i}", brand="Fiat")
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.lost_pages.append((1, None, None, 5))
+        return iter([_snippet(f"seen-{i}") for i in range(1000)])
+
+    def fetch_detail_fn(client, url):
+        # Serves both the missing-listing pass (which only reads "brand") and
+        # the same-sweep backlog enriching the 1000 freshly-crawled listings
+        # (which needs the full shape), so the payload has to satisfy both.
+        return DetailResult(sold=False, data=_full_detail_data(brand="Fiat"))
+
+    run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    per_listing = [
+        e for e in db_session.query(ScrapeEvent).all()
+        if "non trovato nella scansione" in e.message.lower()
+        or "not found in sweep" in e.message.lower()
+    ]
+    assert len(per_listing) <= 1, f"expected a single summary, got {len(per_listing)}"
+
+
+def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
+    """The heart of the principle: absence of proof is not proof of absence.
+
+    This is asserted explicitly rather than assumed from the fact that the
+    29/07 code happened to behave this way -- an assumption is what a later
+    refactor breaks silently, and the failure mode is inventing sales.
+    """
+    _seed_active_listing(db_session, "gone-1", brand="Fiat")
+    calls = {"n": 0}
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        return iter([_snippet(f"seen-{i}") for i in range(10)])
+
+    def fetch_detail_fn(client, url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return DetailResult(sold=True)   # first check: looks removed
+        raise TimeoutError("timed out")      # confirmation: we could not ask
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert db_session.get(Listing, "gone-1").status == "active"
+    assert db_session.get(Listing, "gone-1").sold_at is None
+    assert run.sold_detected == 0
+
+
+def test_a_block_still_stops_the_sweep_in_each_phase(db_session):
+    """BlockedError stays fatal everywhere. Job isolation must not have
+    quietly turned a block into a skipped page in any of the four phases."""
+    for phase_at_call in (1, 2):
+        db_session.query(Listing).delete()
+        db_session.commit()
+        _seed_active_listing(db_session, f"gone-{phase_at_call}", brand="Fiat")
+        calls = {"n": 0}
+
+        def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                     session_refresh_requests=30, report=None):
+            return iter([_snippet("seen-1")])
+
+        def fetch_detail_fn(client, url, _at=phase_at_call):
+            calls["n"] += 1
+            if calls["n"] >= _at:
+                raise BlockedError(403, url)
+            return DetailResult(sold=True)
+
+        run = run_brand_sweep(
+            db_session, _client, BRAND, crawl_fn=crawl_fn,
+            fetch_detail_fn=fetch_detail_fn, concurrency=1,
+        )
+
+        assert run.status == "blocked", f"a block at call {phase_at_call} must stop the sweep"
+        assert db_session.get(Listing, f"gone-{phase_at_call}").status == "active"

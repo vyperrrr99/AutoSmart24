@@ -12,7 +12,8 @@ from autosmart24.db.dealers import upsert_dealer
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.scraping.change_detection import diff_sweep
 from autosmart24.scraping.concurrency import run_worker_pool
-from autosmart24.scraping.crawler import crawl_brand
+from autosmart24.scraping.coverage import assess_coverage
+from autosmart24.scraping.crawler import CrawlReport, crawl_brand
 from autosmart24.scraping.detail_queue import fetch_detail
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
 from autosmart24.scraping.sold_confirmation import looks_removed
@@ -252,12 +253,14 @@ def run_brand_sweep(
             session.execute(select(Listing.id).where(Listing.brand == brand.display_name)).scalars().all()
         )
 
+        crawl_report = CrawlReport()
         try:
             for batch in _iter_batches(
                 crawl_fn(
                     client_factory, brand.slug, brand.make_id,
                     year_from=year_from, concurrency=concurrency,
                     session_refresh_requests=session_refresh_requests,
+                    report=crawl_report,
                 ),
                 batch_size,
             ):
@@ -374,6 +377,40 @@ def run_brand_sweep(
             session.commit()
             return run
 
+        coverage = assess_coverage(
+            lost_models=len(crawl_report.lost_models),
+            lost_pages=len(crawl_report.lost_pages),
+            listings_seen=listings_seen,
+        )
+        if not coverage.can_detect_sales:
+            # The crawl did not cover enough ground for "active in the database
+            # but not seen on the site" to mean anything. The listings it did
+            # collect are already committed batch by batch and stay; only the
+            # judgement is deferred to the next cycle, which is the same
+            # delay-over-falsehood trade the 28/07 spec already accepted.
+            run.phase = "detail"
+            run.search_finished_at = _now()
+            _log_event(
+                session, run, "warning",
+                f"Rilevazione vendite saltata, scansione incompleta: {coverage.reason}",
+            )
+            session.commit()
+            process_detail_backlog(
+                session, client_factory, brand, run,
+                concurrency=concurrency, session_refresh_requests=session_refresh_requests,
+                fetch_detail_fn=fetch_detail_fn, year_from=year_from,
+            )
+            run.listings_seen = listings_seen
+            run.new_listings = len(new_ids)
+            run.price_changes = price_changes
+            run.sold_detected = 0
+            if run.status != "blocked":
+                run.status = "partial"
+            run.phase = None
+            run.finished_at = _now()
+            session.commit()
+            return run
+
         missing_ids = set(active_db_prices.keys()) - seen_ids
         now = _now()
         sold_count = 0
@@ -389,6 +426,7 @@ def run_brand_sweep(
             listing_id, url = job
             return [(listing_id, fetch_detail_fn(client, url))]
 
+        missing_but_alive = 0
         try:
             for listing_id, result in run_worker_pool(
                 missing_jobs, _missing_worker, client_factory, concurrency, session_refresh_requests
@@ -398,17 +436,39 @@ def run_brand_sweep(
                 if looks_removed(result, row.brand):
                     sold_candidates.append(listing_id)
                 else:
+                    missing_but_alive += 1
                     run.errors_count += 1
-                    _log_event(
-                        session, run, "warning",
-                        f"Listing {listing_id} not found in sweep but still active on detail page",
-                        url=row.url,
-                    )
+                    # With a known coverage gap (estimated_missing == 0) this
+                    # path is the expected outcome for every listing the crawl
+                    # missed, not an anomaly: one event each would read as a
+                    # serious fault on the dashboard, this project's only
+                    # monitoring channel. When the gap is unknown or nonzero the
+                    # summary below covers it instead.
+                    if coverage.estimated_missing == 0:
+                        _log_event(
+                            session, run, "warning",
+                            f"Listing {listing_id} not found in sweep but still active on detail page",
+                            url=row.url,
+                        )
         except BlockedError as exc:
             run.status = "blocked"
             run.phase = None
             run.errors_count += 1
             _log_event(session, run, "blocked", str(exc), url=exc.url)
+
+        # estimated_missing is None exactly when a model was lost -- but that
+        # case already returned above via coverage.can_detect_sales, so this
+        # line is unreachable with estimated_missing is None today. Guarded
+        # with a truthiness check anyway rather than `> 0`, which would raise
+        # TypeError on None: the coupling between this file and coverage.py
+        # deciding that is invisible, and the failure mode of trusting it is an
+        # exception inside the sold-detection path.
+        if coverage.estimated_missing and missing_but_alive:
+            _log_event(
+                session, run, "warning",
+                f"{missing_but_alive} annunci non trovati nella scansione ma ancora attivi "
+                f"(atteso: {coverage.reason})",
+            )
 
         backlog_removed_reports = 0
         if run.status != "blocked":
