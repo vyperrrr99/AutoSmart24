@@ -244,13 +244,14 @@ def run_brand_sweep(
         active_rows = session.execute(active_stmt).scalars().all()
         active_db_prices = {row.id: row.price for row in active_rows}
         active_rows_by_id = {row.id: row for row in active_rows}
-        # All listing IDs that exist for this brand regardless of status, so a
-        # listing that reappears while sitting at a non-"active" status (most
-        # commonly "sold") can be recognized as a relist rather than mistaken
-        # for a genuinely new listing -- active_db_prices above only covers
-        # status="active" rows, so diff_sweep alone cannot tell the difference.
-        existing_ids = set(
-            session.execute(select(Listing.id).where(Listing.brand == brand.display_name)).scalars().all()
+        # id -> brand, across ALL brands rather than the one being swept.
+        # AutoScout24 reassigns the id of a withdrawn ad to an unrelated car,
+        # and that car can belong to a different brand: scoped to one brand the
+        # lookup missed the collision, the code took the INSERT path, and the
+        # primary key violation killed the whole sweep. See
+        # docs/superpowers/specs/2026-07-28-listing-id-reuse-known-issue.md
+        existing_brand_by_id: dict[str, str] = dict(
+            session.execute(select(Listing.id, Listing.brand)).all()
         )
 
         crawl_report = CrawlReport()
@@ -277,7 +278,23 @@ def run_brand_sweep(
                         # insert/PriceHistory row rather than crashing).
                         continue
                     snippet = batch_snippets[listing_id]
-                    if listing_id in existing_ids:
+                    existing_brand = existing_brand_by_id.get(listing_id)
+                    if existing_brand is not None and existing_brand != brand.display_name:
+                        # The id now belongs to a different car. Updating the row
+                        # in place would write this car's fields, and its future
+                        # price history, onto the other brand's record. Skip it:
+                        # the new car is not captured, which is the limit this
+                        # deliberately accepts -- see the known-issue document
+                        # for what a semantically complete fix would require.
+                        run.errors_count += 1
+                        _log_event(
+                            session, run, "warning",
+                            f"Id {listing_id} già presente sotto la marca {existing_brand}: "
+                            f"riuso id di AutoScout, annuncio saltato",
+                            url=snippet["url"],
+                        )
+                        continue
+                    if existing_brand is not None:
                         # Reappeared under a status other than "active" (most commonly
                         # "sold" -- either a genuine temporary delisting/relist, or a
                         # prior false-positive sold confirmation). diff_sweep's

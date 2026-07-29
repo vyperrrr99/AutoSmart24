@@ -47,11 +47,11 @@ def _client() -> RateLimitedClient:
     return RateLimitedClient(min_delay_seconds=0, max_delay_seconds=0, sleep_fn=lambda _: None)
 
 
-def _fake_snippet(listing_id: str, price: int) -> dict:
+def _fake_snippet(listing_id: str, price: int, brand: str = "Fiat") -> dict:
     return {
         "id": listing_id,
         "cross_reference_id": listing_id,
-        "brand": "Fiat",
+        "brand": brand,
         "model": "Panda",
         "model_group": "Panda",
         "variant": None,
@@ -1064,3 +1064,98 @@ def test_process_detail_backlog_upserts_dealer_and_links_listing(db_session):
     assert dealer is not None
     assert dealer.company_name == "Test Dealer Srl"
     assert dealer.ratings_stars == 4.5
+
+
+def test_run_brand_sweep_skips_a_listing_id_that_belongs_to_another_brand(db_session):
+    """AutoScout24 reassigns the id of a withdrawn ad to an unrelated car, and
+    the new car can belong to a different brand. The existing-id guard used to
+    be scoped to the brand being swept, so the sweep took the INSERT path and
+    died on listings_pkey -- taking 28,000 healthy listings with it. Audi hit
+    this five times on the same id across two machines.
+    """
+    now = dt.datetime(2026, 7, 1)
+    db_session.add(
+        Listing(
+            id="reused-1", brand="Mercedes-Benz", status="sold", url="https://x/old",
+            price=10000, first_seen_at=now, last_seen_at=now,
+            last_checked_at=now, detail_scraped=True,
+        )
+    )
+    db_session.commit()
+
+    audi = BrandConfig(slug="audi", make_id=9, display_name="Audi")
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _fake_snippet("reused-1", 20000, brand="Audi")
+        yield _fake_snippet("fresh-1", 21000, brand="Audi")
+
+    run = run_brand_sweep(
+        db_session, _client, audi, crawl_fn=fake_crawl,
+        fetch_detail_fn=_noop_fetch_detail, concurrency=1,
+    )
+
+    # The sweep must reach the end, not just avoid crashing.
+    assert run.status in ("success", "partial")
+    assert run.finished_at is not None
+    # The other listing in the same batch is unaffected.
+    assert db_session.get(Listing, "fresh-1") is not None
+    # The pre-existing row keeps its own brand: overwriting it would attribute
+    # one car's price history to another.
+    stale = db_session.get(Listing, "reused-1")
+    assert stale.brand == "Mercedes-Benz"
+    assert stale.status == "sold"
+
+
+def test_run_brand_sweep_records_each_id_reuse_it_meets(db_session):
+    """Frequency was estimated from a single observed case. Logging every
+    occurrence is what turns it into a measurement."""
+    now = dt.datetime(2026, 7, 1)
+    db_session.add(
+        Listing(
+            id="reused-1", brand="Mercedes-Benz", status="sold", url="https://x/old",
+            price=10000, first_seen_at=now, last_seen_at=now,
+            last_checked_at=now, detail_scraped=True,
+        )
+    )
+    db_session.commit()
+
+    audi = BrandConfig(slug="audi", make_id=9, display_name="Audi")
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _fake_snippet("reused-1", 20000, brand="Audi")
+
+    run = run_brand_sweep(
+        db_session, _client, audi, crawl_fn=fake_crawl,
+        fetch_detail_fn=_noop_fetch_detail, concurrency=1,
+    )
+
+    messages = [e.message for e in db_session.query(ScrapeEvent).all()]
+    assert any("reused-1" in m and "Mercedes-Benz" in m for m in messages)
+    assert run.errors_count >= 1
+
+
+def test_run_brand_sweep_still_relists_a_reappearing_listing_of_the_same_brand(db_session):
+    """The global lookup must not break the existing relist path: an id that
+    comes back under its OWN brand is a relist, not a reuse."""
+    now = dt.datetime(2026, 7, 1)
+    db_session.add(
+        Listing(
+            id="back-1", brand="Fiat", status="sold", url="https://x/back",
+            price=9000, first_seen_at=now, last_seen_at=now,
+            last_checked_at=now, detail_scraped=True,
+            sold_at=dt.datetime(2026, 7, 5),
+        )
+    )
+    db_session.commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        yield _fake_snippet("back-1", 9500, brand="Fiat")
+
+    run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        fetch_detail_fn=_noop_fetch_detail, concurrency=1,
+    )
+
+    row = db_session.get(Listing, "back-1")
+    assert row.status == "active"
+    assert row.sold_at is None
