@@ -13,12 +13,15 @@ API=http://localhost:8001
 QUEUE="audi fiat"
 PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
 
-status_of() {
+run_snapshot() {  # $1=brand -> "id|status" of the most recent run row, or "|"
   curl -s -m 10 "$API/brands/$1/runs" 2>/dev/null > /tmp/_r2_runs.json
   python3 - <<'PY' 2>/dev/null
 import json
-try: print(json.load(open('/tmp/_r2_runs.json'))[0]['status'])
-except Exception: print('')
+try:
+    r = json.load(open('/tmp/_r2_runs.json'))[0]
+    print(f"{r['id']}|{r['status']}")
+except Exception:
+    print('|')
 PY
 }
 
@@ -60,12 +63,24 @@ suspect_count() {
 
 # Runs one brand to completion and echoes its final status.
 run_once() {
+  # Captured BEFORE the POST, on every call (including the retry attempt):
+  # on the single-worker executor a requeued retry for another brand can
+  # land ahead of this job, so runs[0] may still be the PREVIOUS attempt's
+  # already-terminal row for a while. Without this, polling below would
+  # read that stale status and return as if this attempt had finished.
+  local prev_id cur_id status
+  IFS='|' read -r prev_id _ <<< "$(run_snapshot "$1")"
   curl -s -m 15 -X POST "$API/brands/$1/run-now" >/dev/null 2>&1
   sleep 10
   while true; do
-    S=$(status_of "$1")
-    case "$S" in
-      success|error|blocked|partial) echo "$S"; return ;;
+    IFS='|' read -r cur_id status <<< "$(run_snapshot "$1")"
+    if [ -n "$cur_id" ] && [ "$cur_id" = "$prev_id" ]; then
+      echo "   $1 · in coda, in attesa che la run parta (id precedente: $prev_id) · $(date '+%H:%M:%S')" >&2
+      sleep 120
+      continue
+    fi
+    case "$status" in
+      success|error|blocked|partial) echo "$status"; return ;;
       "") echo "   $1 · API non raggiungibile · $(date '+%H:%M:%S')" >&2 ;;
       *)  echo "   $1 · $(progress) · $(date '+%H:%M:%S')" >&2 ;;
     esac

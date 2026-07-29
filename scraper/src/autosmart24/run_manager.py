@@ -378,16 +378,37 @@ def run_brand_sweep(
                     row.last_seen_at = now
                     row.last_checked_at = now
 
+                # seen_ids updates immediately and UNCONDITIONALLY, ahead of
+                # the commit below -- deliberately never reverted, even if
+                # this batch's commit fails and rolls back (see the except
+                # clause). These listings were genuinely seen on the site; if
+                # a failed commit knocked their ids back out of seen_ids they
+                # would fall into missing_ids, and from there into the one
+                # code path that can write status="sold" -- reopening, from a
+                # new direction, the false-sale hole this project closed on
+                # 29/07. Do NOT "fix" this to be symmetric with the counters
+                # below: the asymmetry is the point.
                 seen_ids.update(batch_snippets.keys())
+
                 # relisted_ids are ids from diff.new_ids that were treated as
                 # UPDATEs to a pre-existing row above, not fresh inserts;
                 # reused_ids were skipped entirely (a different brand already
                 # holds that id) and written nowhere -- neither must inflate
                 # new_ids/run.new_listings with a listing that does not exist
                 # in the database.
-                new_ids.update(diff.new_ids - relisted_ids - reused_ids)
-                listings_seen += len(batch_snippets)
-                price_changes += len(diff.price_changed)
+                batch_new_ids = diff.new_ids - relisted_ids - reused_ids
+                batch_listings_seen = len(batch_snippets)
+                batch_price_changes = len(diff.price_changed)
+
+                # Unlike seen_ids above, these three counters are applied
+                # provisionally and unwound in the except clause below if the
+                # commit fails: run.new_listings/listings_seen/price_changes
+                # must reflect what was durably written, or a batch dropped by
+                # e.g. a schema mismatch would report thousands of "new"
+                # listings that were never inserted.
+                new_ids.update(batch_new_ids)
+                listings_seen += batch_listings_seen
+                price_changes += batch_price_changes
 
                 # Persist progress in the SAME commit as this batch's listing
                 # changes: the dashboard polls these fields mid-run, and
@@ -404,13 +425,13 @@ def run_brand_sweep(
                     # listings; before this it cost the entire brand. The rows
                     # are not lost for good -- they carry no state of their own
                     # yet, so the next sweep inserts them normally.
-                    #
-                    # seen_ids already holds this batch's ids and is deliberately
-                    # NOT rolled back: those listings were genuinely seen on the
-                    # site, so letting them fall into missing_ids would invite
-                    # exactly the false-sale path this project spent 29/07
-                    # closing.
                     session.rollback()
+                    # Undo this batch's contribution to the counters above so
+                    # they reflect only durably written data -- but seen_ids
+                    # is NOT touched here; see the comment where it is updated.
+                    new_ids -= batch_new_ids
+                    listings_seen -= batch_listings_seen
+                    price_changes -= batch_price_changes
                     run.errors_count += 1
                     _log_event(
                         session, run, "error",
@@ -430,7 +451,16 @@ def run_brand_sweep(
             lost_pages=len(crawl_report.lost_pages),
             listings_seen=listings_seen,
         )
-        if not coverage.can_detect_sales:
+        # crawl_report.finished is only set True once crawl_brand reaches its
+        # final block (see CrawlReport's docstring) -- a crawl abandoned
+        # earlier leaves both loss lists empty, which would otherwise read as
+        # "nothing lost" instead of "we don't know". can_detect_sales alone
+        # cannot see that: it only ever looks at what WAS reported lost, so it
+        # must be gated on finished too rather than trusted on its own.
+        if not crawl_report.finished or not coverage.can_detect_sales:
+            gate_reason = coverage.reason if crawl_report.finished else (
+                "il crawl non è arrivato in fondo (finished=False)"
+            )
             # The crawl did not cover enough ground for "active in the database
             # but not seen on the site" to mean anything. The listings it did
             # collect are already committed batch by batch and stay; only the
@@ -440,7 +470,7 @@ def run_brand_sweep(
             run.search_finished_at = _now()
             _log_event(
                 session, run, "warning",
-                f"Rilevazione vendite saltata, scansione incompleta: {coverage.reason}",
+                f"Rilevazione vendite saltata, scansione incompleta: {gate_reason}",
             )
             session.commit()
             backlog_removed_reports = process_detail_backlog(
@@ -502,17 +532,20 @@ def run_brand_sweep(
                     sold_candidates.append(listing_id)
                 else:
                     missing_but_alive += 1
-                    run.errors_count += 1
                     # estimated_missing == 0 means the coverage gap is known
                     # to be zero, so a listing missing from the search yet
                     # alive on its own detail page has no explanation in a
-                    # lost page or model -- it is logged individually because
-                    # it genuinely is an anomaly. When the gap is nonzero this
-                    # is the expected outcome for every listing the crawl
-                    # missed, not an anomaly: one event each would read as a
-                    # serious fault on the dashboard, this project's only
-                    # monitoring channel -- the summary below covers it instead.
+                    # lost page or model -- it is logged individually, AND
+                    # counted, because it genuinely is an anomaly. When the
+                    # gap is nonzero this is the expected outcome for every
+                    # listing the crawl missed, not an anomaly: one event (and
+                    # one errors_count increment) each would read as a serious
+                    # fault on the dashboard, this project's only monitoring
+                    # channel -- the summary below covers it instead, without
+                    # inflating errors_count for a gap already declared and
+                    # accepted under the coverage threshold.
                     if coverage.estimated_missing == 0:
+                        run.errors_count += 1
                         _log_event(
                             session, run, "warning",
                             f"Listing {listing_id} not found in sweep but still active on detail page",

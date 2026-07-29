@@ -70,6 +70,23 @@ run_guard = BrandRunGuard()
 queue_controller = QueueController()
 
 
+def _requeue_brand_sweep(brand: BrandConfig) -> None:
+    # Back of the queue, not immediately: the executor has a single
+    # worker, so a date-triggered job runs after everything already
+    # submitted -- hours, by which time a transient network fault
+    # has cleared. Once only: a deterministic fault fails identically
+    # every time, as Audi demonstrated five times on one listing.
+    # Nanosecond resolution, not replace_existing: two failures of
+    # the same brand landing in the same wall-clock second (e.g.
+    # a manual retry that fails fast) must each get their own
+    # retry job, not silently collapse into one via a
+    # ConflictingIdError-avoiding overwrite.
+    scheduler.scheduler.add_job(
+        _run_fn, args=[brand], kwargs={"is_retry": True}, trigger="date",
+        id=f"retry-{brand.slug}-{time.time_ns()}",
+    )
+
+
 def _run_fn(brand: BrandConfig, is_retry: bool = False) -> None:
     if queue_controller.is_halted():
         # Exit before opening a client: with the queue halted after a block,
@@ -102,27 +119,34 @@ def _run_fn(brand: BrandConfig, is_retry: bool = False) -> None:
             year_from = None
             if tracked is not None and tracked.year_from_years is not None:
                 year_from = dt.date.today().year - tracked.year_from_years
-            run = run_brand_sweep(
-                session, _client_factory, brand,
-                concurrency=CONCURRENCY, year_from=year_from, session_refresh_requests=SESSION_REFRESH_REQUESTS,
-            )
+            try:
+                run = run_brand_sweep(
+                    session, _client_factory, brand,
+                    concurrency=CONCURRENCY, year_from=year_from, session_refresh_requests=SESSION_REFRESH_REQUESTS,
+                )
+            except Exception:
+                # run_brand_sweep's own last-resort handler already records
+                # status="error" on the run row and then deliberately
+                # re-raises -- that raise is load-bearing (it is what
+                # surfaces the failure in application logs; many tests
+                # depend on it), so it is never caught here to swallow it.
+                # But that also means run_brand_sweep NEVER returns a run
+                # with status="error": the caller only ever sees that
+                # outcome as an exception unwinding past this point. Without
+                # this except, that exception would skip the requeue below
+                # entirely, unwind straight out of _run_fn, and leave the
+                # brand un-retried until its next scheduled cycle -- exactly
+                # the gap that let a genuine failure go unretried.
+                if not is_retry:
+                    _requeue_brand_sweep(brand)
+                    logger.warning(
+                        "Sweep for %s raised; requeued once at the back of the queue", brand.slug,
+                    )
+                raise
             if run is not None and run.status == "blocked":
                 queue_controller.halt(f"blocco rilevato su {brand.display_name}")
             elif run is not None and run.status in ("error", "partial") and not is_retry:
-                # Back of the queue, not immediately: the executor has a single
-                # worker, so a date-triggered job runs after everything already
-                # submitted -- hours, by which time a transient network fault
-                # has cleared. Once only: a deterministic fault fails identically
-                # every time, as Audi demonstrated five times on one listing.
-                # Nanosecond resolution, not replace_existing: two failures of
-                # the same brand landing in the same wall-clock second (e.g.
-                # a manual retry that fails fast) must each get their own
-                # retry job, not silently collapse into one via a
-                # ConflictingIdError-avoiding overwrite.
-                scheduler.scheduler.add_job(
-                    _run_fn, args=[brand], kwargs={"is_retry": True}, trigger="date",
-                    id=f"retry-{brand.slug}-{time.time_ns()}",
-                )
+                _requeue_brand_sweep(brand)
                 logger.warning(
                     "Sweep for %s ended %s; requeued once at the back of the queue",
                     brand.slug, run.status,

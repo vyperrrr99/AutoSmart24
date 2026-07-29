@@ -247,6 +247,28 @@ def test_run_worker_pool_without_a_failures_list_still_isolates_the_job():
     ) == [0, 2]
 
 
+def test_run_worker_pool_when_every_job_fails_yields_nothing_and_records_one_failure_each():
+    """Central to the 29/07 isolation change, and nothing asserted it directly:
+    a worker whose every job raises a non-BlockedError exception must not
+    deadlock or crash the pool. It must still terminate cleanly, yield no
+    results, and report exactly one JobFailure per job -- not fewer (lost
+    failures) and not a fatal error escaping the pool."""
+    def worker_fn(job, client):
+        raise ValueError(f"boom-{job}")
+
+    failures: list = []
+    results = list(
+        run_worker_pool(
+            list(range(6)), worker_fn, _client_factory,
+            concurrency=3, session_refresh_requests=100, failures=failures,
+        )
+    )
+
+    assert results == []
+    assert sorted(f.job for f in failures) == list(range(6))
+    assert all(isinstance(f.error, ValueError) for f in failures)
+
+
 def test_run_worker_pool_client_factory_failure_is_still_fatal():
     """A factory that cannot build a client is systemic, not a bad page."""
     def factory():

@@ -19,12 +19,15 @@ QUEUE="toyota nissan alfa-romeo hyundai land-rover kia skoda porsche cupra dacia
        citroen renault jeep ford peugeot bmw mercedes-benz volkswagen audi fiat"
 PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
 
-status_of() {
+run_snapshot() {  # $1=brand -> "id|status" of the most recent run row, or "|"
   curl -s -m 10 "$API/brands/$1/runs" 2>/dev/null > /tmp/_c_runs.json
   python3 - <<'PY' 2>/dev/null
 import json
-try: print(json.load(open('/tmp/_c_runs.json'))[0]['status'])
-except Exception: print('')
+try:
+    r = json.load(open('/tmp/_c_runs.json'))[0]
+    print(f"{r['id']}|{r['status']}")
+except Exception:
+    print('|')
 PY
 }
 
@@ -73,11 +76,25 @@ START_ALL=$(date +%s)
 SUSPECT_TOTAL=0
 
 for BRAND in $QUEUE; do
+  # Captured BEFORE the POST: on the single-worker executor a previous
+  # brand's requeued retry can land ahead of this brand's job, so the run
+  # row for THIS cycle may not exist yet for a while. Without this, polling
+  # runs[0] below would read the PREVIOUS cycle's already-terminal status
+  # (e.g. success) and print FINE for a brand that never actually started.
+  IFS='|' read -r PREV_ID _ <<< "$(run_snapshot "$BRAND")"
   curl -s -m 15 -X POST "$API/brands/$BRAND/run-now" >/dev/null 2>&1
   echo "AVVIO $BRAND  $(date '+%H:%M:%S')"
   sleep 10
   while true; do
-    S=$(status_of "$BRAND")
+    IFS='|' read -r CUR_ID S <<< "$(run_snapshot "$BRAND")"
+    if [ -n "$CUR_ID" ] && [ "$CUR_ID" = "$PREV_ID" ]; then
+      # Still the previous cycle's run row -- this brand's job has not
+      # started yet (queued behind a retry). Wait for a genuinely new run
+      # id rather than trusting any status read off it.
+      echo "   $BRAND · in coda, in attesa che la run parta (id precedente: $PREV_ID) · $(date '+%H:%M:%S')"
+      sleep 120
+      continue
+    fi
     case "$S" in
       success|error|blocked|partial)
         echo "FINE  $(report_line "$BRAND")  $(date '+%H:%M:%S')"

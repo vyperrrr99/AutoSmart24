@@ -53,6 +53,14 @@ def test_run_records_search_phase_progress_before_the_crawl_ends(db_session):
     observed = {}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _snippet("a-1", 1000)
         yield _snippet("a-2", 2000)
 
@@ -93,6 +101,14 @@ def test_run_switches_to_detail_phase_and_counts_enriched(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _snippet("d-1", 1000)
         yield _snippet("d-2", 1000)
 
@@ -118,6 +134,14 @@ def test_run_marks_detail_phase_while_backlog_is_being_processed(db_session):
     observed = {}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _snippet("d-1", 1000)
 
     def fake_detail(client, url):

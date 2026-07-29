@@ -326,15 +326,28 @@ def requeue_probe(imported_app_module, monkeypatch):
     # early and every assertion below would pass for the wrong reason.
     module.run_guard.release("fiat")
 
-    def run_with(status: str, is_retry: bool = False):
+    def run_with(status: str, is_retry: bool = False, raises: bool = False):
         added.clear()
 
         def fake_sweep(*a, **k):
             sweep_calls.append(status)
+            if raises:
+                # This is the shape production actually produces for a
+                # failed sweep: run_brand_sweep's own last-resort handler
+                # sets status="error" on the run row internally and then
+                # re-raises -- it never RETURNS a run with status="error".
+                # A stub that instead returns _FakeRun("error") exercises a
+                # code path production cannot reach.
+                raise RuntimeError(f"synthetic sweep failure: {status}")
             return _FakeRun(status)
 
         monkeypatch.setattr(module, "run_brand_sweep", fake_sweep)
-        module._run_fn(BrandConfig(slug="fiat", display_name="Fiat", make_id=31), is_retry=is_retry)
+        brand = BrandConfig(slug="fiat", display_name="Fiat", make_id=31)
+        if raises:
+            with pytest.raises(RuntimeError):
+                module._run_fn(brand, is_retry=is_retry)
+        else:
+            module._run_fn(brand, is_retry=is_retry)
         return added
 
     run_with.sweep_calls = sweep_calls
@@ -345,8 +358,13 @@ def test_a_failed_sweep_is_requeued_once_at_the_back_of_the_queue(requeue_probe)
     """The executor has a single worker, so a date-triggered job lands behind
     everything already submitted -- hours later, by which time a transient
     network fault has resolved. Fiat proved it on 29/07: failed at 15:12,
-    recovered at 18:30 with 1,267 sales detected."""
-    added = requeue_probe("error")
+    recovered at 18:30 with 1,267 sales detected.
+
+    The stub raises rather than returning _FakeRun("error"): run_brand_sweep
+    deliberately re-raises after recording status="error" internally, so an
+    exception unwinding out of it -- not a returned "error" run -- is the
+    only shape a failed sweep actually takes in production."""
+    added = requeue_probe("error", raises=True)
     assert len(added) == 1
     assert added[0]["trigger"] == "date"
     assert added[0]["kwargs"] == {"is_retry": True}
@@ -359,8 +377,10 @@ def test_a_partial_sweep_is_requeued(requeue_probe):
 
 def test_a_retry_that_fails_again_is_not_requeued(requeue_probe):
     """Audi failed identically five times on the same listing. A deterministic
-    fault does not resolve by repetition, and a second retry only burns time."""
-    assert requeue_probe("error", is_retry=True) == []
+    fault does not resolve by repetition, and a second retry only burns time.
+    Exercises the exception path (see the note on the test above), which is
+    the shape a retried sweep that fails again actually takes."""
+    assert requeue_probe("error", is_retry=True, raises=True) == []
     # Must be "the sweep ran and correctly declined to requeue," not
     # "_run_fn exited before the sweep" -- both look like added == [].
     assert requeue_probe.sweep_calls == ["error"]

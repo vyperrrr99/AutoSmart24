@@ -44,6 +44,13 @@ def test_enrichment_does_not_sell_a_listing_seen_alive_in_the_same_sweep(db_sess
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _snippet("seen-alive-1")
 
     def fake_detail(client, url):
@@ -98,6 +105,13 @@ def test_a_vanished_listing_needs_two_confirmations_to_be_sold(db_session):
     calls = []
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())          # non compare più nella ricerca
 
     def fake_detail(client, url):
@@ -120,6 +134,13 @@ def test_a_listing_that_reappears_on_the_second_check_stays_active(db_session):
     seen = {"n": 0}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_detail(client, url):
@@ -145,6 +166,13 @@ def test_a_reassigned_id_counts_as_removed_on_both_checks(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_detail(client, url):
@@ -167,6 +195,13 @@ def test_no_candidates_means_no_second_pass(db_session):
     calls = []
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _snippet("present-1")  # still-active-1 is missing from the sweep
 
     def fake_detail(client, url):
@@ -197,6 +232,13 @@ def test_a_block_during_the_confirmation_pass_leaves_unreached_candidates_active
     second_pass_hits = {"n": 0}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # Stands in for a crawl that ran to exhaustion (crawl_brand sets
+        # report.finished=True at its final block) -- the coverage gate now
+        # also consults `finished`, so a stub that skips this would be
+        # mistaken for an abandoned crawl and force the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())  # both listings are missing from the search results
 
     def fake_detail(client, url):
@@ -269,6 +311,7 @@ def test_a_lost_model_suppresses_sold_detection_and_marks_the_run_partial(db_ses
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_models.append(("modello-perso",))
+            report.finished = True
         return iter([_snippet("still-here-1")])
 
     calls: list[str] = []
@@ -291,7 +334,43 @@ def test_a_lost_model_suppresses_sold_detection_and_marks_the_run_partial(db_ses
     assert run.status == "partial"
     assert run.sold_detected == 0
     assert db_session.get(Listing, "gone-1").status == "active"
+    assert calls, "the backlog enrichment pass must still have run"
     assert gone_url not in calls, "sold detection must not run when a model was lost"
+
+
+def test_an_unfinished_crawl_report_suppresses_sold_detection_even_with_empty_loss_lists(db_session):
+    """`finished` guards against reading a partial report as a clean one: a
+    crawl abandoned before its final block (a future bug, or a test double
+    that forgets to set it) must not enable sold detection just because it
+    never got the chance to record a loss. Both loss lists stay empty here
+    on purpose -- that is exactly the case a lost-models/lost-pages-only
+    check would miss."""
+    _seed_active_listing(db_session, "gone-1", brand="Fiat")
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        # Deliberately never sets report.finished = True, unlike every other
+        # crawl_fn stub in this file -- simulates a crawl generator abandoned
+        # before crawl_brand's final block.
+        return iter([_snippet("still-here-1")])
+
+    calls: list[str] = []
+    gone_url = "https://www.autoscout24.it/annunci/gone-1"
+
+    def fetch_detail_fn(client, url):
+        calls.append(url)
+        return DetailResult(sold=False, data=_full_detail_data())
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert run.status == "partial"
+    assert run.sold_detected == 0
+    assert db_session.get(Listing, "gone-1").status == "active"
+    assert calls, "the backlog enrichment pass must still have run"
+    assert gone_url not in calls, "sold detection must not run when the crawl never finished"
 
 
 def test_a_small_page_gap_still_runs_sold_detection_and_the_run_is_success(db_session):
@@ -303,6 +382,7 @@ def test_a_small_page_gap_still_runs_sold_detection_and_the_run_is_success(db_se
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_pages.append((1, None, None, 5))
+            report.finished = True
         return iter([_snippet(f"seen-{i}") for i in range(500)])
 
     calls: list[str] = []
@@ -340,6 +420,7 @@ def test_a_large_page_gap_suppresses_sold_detection(db_session):
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_pages.extend((1, None, None, p) for p in range(2, 40))
+            report.finished = True
         return iter([_snippet(f"seen-{i}") for i in range(100)])
 
     calls: list[str] = []
@@ -359,6 +440,7 @@ def test_a_large_page_gap_suppresses_sold_detection(db_session):
 
     assert run.status == "partial"
     assert db_session.get(Listing, "gone-1").status == "active"
+    assert calls, "the backlog enrichment pass must still have run"
     assert gone_url not in calls, "sold detection must not run over the threshold"
 
 
@@ -372,6 +454,7 @@ def test_a_partial_run_counts_backlog_removed_reports_as_errors(db_session):
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_models.append(("modello-perso",))
+            report.finished = True
         return iter([_snippet("new-1")])
 
     def fetch_detail_fn(client, url):
@@ -392,6 +475,7 @@ def test_a_partial_run_still_keeps_the_listings_it_collected(db_session):
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_models.append(("modello-perso",))
+            report.finished = True
         return iter([_snippet("new-1"), _snippet("new-2")])
 
     run = run_brand_sweep(
@@ -409,6 +493,7 @@ def test_a_partial_run_records_why(db_session):
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_models.append(("modello-perso",))
+            report.finished = True
         return iter([])
 
     run = run_brand_sweep(
@@ -431,6 +516,7 @@ def test_a_gap_under_threshold_logs_one_summary_not_one_event_per_listing(db_ses
                  session_refresh_requests=30, report=None):
         if report is not None:
             report.lost_pages.append((1, None, None, 5))
+            report.finished = True
         return iter([_snippet(f"seen-{i}") for i in range(1000)])
 
     def fetch_detail_fn(client, url):
@@ -439,7 +525,7 @@ def test_a_gap_under_threshold_logs_one_summary_not_one_event_per_listing(db_ses
         # (which needs the full shape), so the payload has to satisfy both.
         return DetailResult(sold=False, data=_full_detail_data(brand="Fiat"))
 
-    run_brand_sweep(
+    run = run_brand_sweep(
         db_session, _client, BRAND, crawl_fn=crawl_fn,
         fetch_detail_fn=fetch_detail_fn, concurrency=1,
     )
@@ -458,6 +544,11 @@ def test_a_gap_under_threshold_logs_one_summary_not_one_event_per_listing(db_ses
     # gap completely unrecorded.
     assert len(summaries) == 1, f"expected exactly one summary, got {len(summaries)}"
     assert "40" in summaries[0].message, "the summary must record how many listings were affected"
+    # Not just the events: a healthy run with a declared, sub-threshold gap
+    # must not show "Errori: 40" on the dashboard either -- these 40 are the
+    # expected consequence of the declared gap, not a real anomaly, and the
+    # summary event above already carries the number.
+    assert run.errors_count == 0, "a declared sub-threshold gap must not inflate errors_count"
 
 
 def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
@@ -473,6 +564,8 @@ def test_a_candidate_whose_confirmation_times_out_stays_active(db_session):
 
     def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
                  session_refresh_requests=30, report=None):
+        if report is not None:
+            report.finished = True
         return iter([_snippet(f"seen-{i}") for i in range(10)])
 
     def fetch_detail_fn(client, url):
@@ -511,6 +604,8 @@ def test_a_block_still_stops_the_sweep_in_each_phase(db_session):
 
         def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
                      session_refresh_requests=30, report=None):
+            if report is not None:
+                report.finished = True
             return iter([_snippet("seen-1")])
 
         def fetch_detail_fn(client, url, _at=phase_at_call):

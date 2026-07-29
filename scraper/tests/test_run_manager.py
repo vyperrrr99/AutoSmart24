@@ -111,6 +111,14 @@ def _noop_fetch_detail(client, url):
 
 def test_run_brand_sweep_records_new_listing(db_session):
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("new-1", 15000)
 
     run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=_noop_fetch_detail)
@@ -130,6 +138,14 @@ def test_run_brand_sweep_detects_price_change(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("existing-1", 12000)
 
     run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl)
@@ -156,6 +172,14 @@ def test_run_brand_sweep_relists_a_previously_sold_listing_that_reappears(db_ses
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("relist-1", 11000)
 
     run = run_brand_sweep(db_session, _client, BRAND, crawl_fn=fake_crawl, fetch_detail_fn=_noop_fetch_detail)
@@ -177,6 +201,14 @@ def test_run_brand_sweep_confirms_sold_when_detail_confirms(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -195,6 +227,14 @@ def test_run_brand_sweep_keeps_active_when_detail_still_active(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -212,6 +252,14 @@ def test_run_brand_sweep_keeps_active_when_detail_still_active(db_session):
 
 def test_run_brand_sweep_marks_blocked_on_blocked_error(db_session):
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("x-1", 1000)
         raise BlockedError(403, "https://www.autoscout24.it/lst/fiat")
 
@@ -226,6 +274,14 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("pending-1", 10000)
 
     def fake_fetch_detail(client, url):
@@ -260,6 +316,14 @@ def test_run_brand_sweep_fetches_detail_for_listings_new_in_this_same_sweep(db_s
     fetched_urls: list[str] = []
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("brand-new-1", 9000)
 
     def fake_fetch_detail(client, url):
@@ -281,6 +345,14 @@ def test_run_brand_sweep_marks_blocked_and_stops_on_block_during_missing_ids_loo
     call_count = {"n": 0}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -298,6 +370,14 @@ def test_run_brand_sweep_marks_blocked_on_block_during_detail_backlog(db_session
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("pending-blocked", 10000)
 
     def fake_fetch_detail(client, url):
@@ -317,6 +397,14 @@ def test_run_brand_sweep_errors_count_reflects_anomalies(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -357,6 +445,14 @@ def test_run_brand_sweep_does_not_count_backlog_removals_as_sales(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("backlog-sold-2", 10000)
 
     def fake_fetch_detail(client, url):
@@ -376,6 +472,14 @@ def test_run_brand_sweep_commits_scrape_run_before_crawling(db_session):
     it has yielded anything, using a second session on the same engine."""
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         other = sessionmaker(bind=db_session.bind)()
         try:
             run = other.query(ScrapeRun).filter_by(brand="Fiat").one()
@@ -395,6 +499,14 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
     yielding all listings."""
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("batch-1", 1000)
         yield _fake_snippet("batch-2", 2000)
 
@@ -431,6 +543,14 @@ def test_run_brand_sweep_survives_a_batch_whose_commit_fails(db_session, monkeyp
         return real_commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         for i in range(10):
             yield _fake_snippet(f"item-{i}", 1000 + i)
 
@@ -465,6 +585,14 @@ def test_a_dropped_batch_does_not_send_its_listings_down_the_missing_path(db_ses
         return real_commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         for i in range(10):
             yield _fake_snippet(f"item-{i}", 1000 + i)
 
@@ -490,6 +618,10 @@ def test_a_dropped_batch_does_not_send_its_listings_down_the_missing_path(db_ses
     assert run.finished_at is not None
     assert "item-0" not in checked_ids, "a listing seen on the site must not be checked as missing"
     assert db_session.get(Listing, "item-0").status == "active"
+    # item-1..item-4 were in the batch whose commit failed (flaky_commit's 2nd
+    # call) and were rolled back -- they must not inflate new_listings. Only
+    # item-5..item-9, from the batch that committed successfully, count.
+    assert run.new_listings == 5, "a dropped batch must not inflate new_listings"
 
 
 def test_listing_accepts_cross_reference_id_longer_than_32_chars(db_session):
@@ -570,6 +702,14 @@ def test_run_brand_sweep_marks_error_and_preserves_partial_state_on_unexpected_e
     must still propagate for operator visibility in logs."""
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("safe-1", 1000)
         yield _fake_snippet("safe-2", 2000)
         raise ValueError("boom - unexpected crawler failure")
@@ -598,6 +738,14 @@ def test_run_brand_sweep_preserves_committed_batches_on_block(db_session):
     the whole sweep."""
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("survivor-1", 1000)
         yield _fake_snippet("survivor-2", 2000)
         raise BlockedError(403, "https://www.autoscout24.it/lst/fiat")
@@ -615,6 +763,14 @@ def test_run_brand_sweep_threads_year_from_concurrency_and_session_refresh_reque
     received = {}
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         received.update(kwargs)
         return iter([])
 
@@ -721,6 +877,14 @@ def test_run_brand_sweep_ignores_active_listings_older_than_the_year_floor(db_se
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter([])
 
     def exploding_fetch_detail(client, url):
@@ -823,6 +987,14 @@ def test_run_brand_sweep_keeps_null_registration_listings_in_scope_with_year_flo
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter([])
 
     def fake_fetch_detail(client, url):
@@ -963,6 +1135,14 @@ def test_run_brand_sweep_skips_detail_backlog_when_already_blocked(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         # "Sees" pending-should-not-run again this sweep so it is excluded from
         # missing_ids, while leaving it detail_scraped=False -- still eligible
         # for the backlog pass, which must never be reached.
@@ -1035,6 +1215,14 @@ def test_run_brand_sweep_excludes_sold_candidates_from_detail_backlog(db_session
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())  # cand-1 never appears in search results this sweep
 
     fetch_calls: list[str] = []
@@ -1058,6 +1246,14 @@ def test_run_brand_sweep_logs_confirmed_sale_as_explicit_removal(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -1082,6 +1278,14 @@ def test_run_brand_sweep_logs_confirmed_sale_as_brand_mismatch(db_session):
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         return iter(())
 
     def fake_fetch_detail(client, url):
@@ -1106,6 +1310,14 @@ def test_run_brand_sweep_backlog_removed_reports_increment_errors_count(db_sessi
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("backlog-removed-1", 10000)
 
     def fake_fetch_detail(client, url):
@@ -1162,6 +1374,14 @@ def test_run_brand_sweep_skips_a_listing_id_that_belongs_to_another_brand(db_ses
     audi = BrandConfig(slug="audi", make_id=9, display_name="Audi")
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("reused-1", 20000, brand="Audi")
         yield _fake_snippet("fresh-1", 21000, brand="Audi")
 
@@ -1201,6 +1421,14 @@ def test_run_brand_sweep_records_each_id_reuse_it_meets(db_session):
     audi = BrandConfig(slug="audi", make_id=9, display_name="Audi")
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("reused-1", 20000, brand="Audi")
 
     run = run_brand_sweep(
@@ -1228,6 +1456,14 @@ def test_run_brand_sweep_still_relists_a_reappearing_listing_of_the_same_brand(d
     db_session.commit()
 
     def fake_crawl(client, brand_slug, make_id, **kwargs):
+        # A stub standing in for a crawl that ran to exhaustion (mirrors
+        # crawl_brand setting report.finished=True at its final block) --
+        # required so run_brand_sweep's coverage gate, which now also
+        # consults `finished`, doesn't mistake these stand-ins for an
+        # abandoned crawl and force every test into the `partial` branch.
+        report = kwargs.get("report")
+        if report is not None:
+            report.finished = True
         yield _fake_snippet("back-1", 9500, brand="Fiat")
 
     run_brand_sweep(
