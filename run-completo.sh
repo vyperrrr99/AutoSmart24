@@ -70,10 +70,28 @@ suspect_count() {
               AND sold_at - last_seen_at < interval '60 minutes';" 2>/dev/null | tr -d ' \n'
 }
 
+# Reads the queue's halt flag. Waiting for a run that will never be created is
+# the one way the wait loop below can hang forever: a halted queue makes
+# _run_fn return before it writes any ScrapeRun row, so no new id ever appears.
+queue_halted() {
+  curl -s -m 10 "$API/queue" 2>/dev/null > /tmp/_c_halt.json
+  python3 - <<'PY' 2>/dev/null
+import json
+try: print("yes" if json.load(open('/tmp/_c_halt.json')).get('halted') else "no")
+except Exception: print("unknown")
+PY
+}
+
+# Ceiling on the wait for a brand's run to start. A requeued retry ahead of us
+# can legitimately take a couple of hours, so this is deliberately generous --
+# it exists to guarantee the giro terminates, not to police the schedule.
+MAX_WAITS=120   # x 120s = 4 hours
+
 echo "=== giro completo avviato $(date '+%d/%m %H:%M:%S') — 24 marche ==="
 echo "    fix vendite deployato, immagine verificata prima dell'avvio"
 START_ALL=$(date +%s)
 SUSPECT_TOTAL=0
+SKIPPED_TOTAL=0
 
 for BRAND in $QUEUE; do
   # Captured BEFORE the POST: on the single-worker executor a previous
@@ -85,12 +103,29 @@ for BRAND in $QUEUE; do
   curl -s -m 15 -X POST "$API/brands/$BRAND/run-now" >/dev/null 2>&1
   echo "AVVIO $BRAND  $(date '+%H:%M:%S')"
   sleep 10
+  WAITS=0
   while true; do
     IFS='|' read -r CUR_ID S <<< "$(run_snapshot "$BRAND")"
     if [ -n "$CUR_ID" ] && [ "$CUR_ID" = "$PREV_ID" ]; then
       # Still the previous cycle's run row -- this brand's job has not
       # started yet (queued behind a retry). Wait for a genuinely new run
       # id rather than trusting any status read off it.
+      #
+      # Bounded, because three situations produce a run row that never
+      # arrives: a halted queue, a brand still held by the concurrency
+      # guard, and a lost run-now POST. Unbounded, this loop would strand
+      # an unattended overnight giro at 120s intervals forever -- worse
+      # than the stale-status bug it replaced, which at least terminated.
+      if [ "$(queue_halted)" = "yes" ]; then
+        echo "  !! CODA FERMA — nessuna run partira'. Riprendi con: curl -X POST $API/queue/resume"
+        exit 1
+      fi
+      WAITS=$((WAITS + 1))
+      if [ "$WAITS" -ge "$MAX_WAITS" ]; then
+        echo "  !! $BRAND · nessuna run avviata dopo $((MAX_WAITS * 120 / 3600))h — la salto e proseguo"
+        SKIPPED_TOTAL=$((SKIPPED_TOTAL + 1))
+        break
+      fi
       echo "   $BRAND · in coda, in attesa che la run parta (id precedente: $PREV_ID) · $(date '+%H:%M:%S')"
       sleep 120
       continue
@@ -124,6 +159,7 @@ echo
 echo "=== RIEPILOGO $(date '+%d/%m %H:%M:%S') ==="
 echo "durata del giro: $(( (END_ALL-START_ALL)/3600 ))h $(( ((END_ALL-START_ALL)%3600)/60 ))m"
 echo "vendite sospette in tutto il giro: $SUSPECT_TOTAL (atteso: 0)"
+echo "marche saltate perche' la run non e' mai partita: $SKIPPED_TOTAL (atteso: 0)"
 echo
 for BRAND in $QUEUE; do report_line "$BRAND"; done
 echo

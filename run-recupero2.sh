@@ -61,6 +61,19 @@ suspect_count() {
               AND sold_at - last_seen_at < interval '60 minutes';" 2>/dev/null | tr -d ' \n'
 }
 
+# Reads the queue's halt flag: waiting for a run that will never be created is
+# the one way the wait loop in run_once can hang forever.
+queue_halted() {
+  curl -s -m 10 "$API/queue" 2>/dev/null > /tmp/_r2_halt.json
+  python3 - <<'PY2' 2>/dev/null
+import json
+try: print("yes" if json.load(open('/tmp/_r2_halt.json')).get('halted') else "no")
+except Exception: print("unknown")
+PY2
+}
+
+MAX_WAITS=120   # x 120s = 4 hours
+
 # Runs one brand to completion and echoes its final status.
 run_once() {
   # Captured BEFORE the POST, on every call (including the retry attempt):
@@ -68,13 +81,26 @@ run_once() {
   # land ahead of this job, so runs[0] may still be the PREVIOUS attempt's
   # already-terminal row for a while. Without this, polling below would
   # read that stale status and return as if this attempt had finished.
-  local prev_id cur_id status
+  local prev_id cur_id status waits=0
   IFS='|' read -r prev_id _ <<< "$(run_snapshot "$1")"
   curl -s -m 15 -X POST "$API/brands/$1/run-now" >/dev/null 2>&1
   sleep 10
   while true; do
     IFS='|' read -r cur_id status <<< "$(run_snapshot "$1")"
     if [ -n "$cur_id" ] && [ "$cur_id" = "$prev_id" ]; then
+      # Bounded: a halted queue, a brand still held by the concurrency guard,
+      # or a lost run-now POST all produce a run row that never arrives, and
+      # an unbounded wait here would strand the script forever -- worse than
+      # the stale-status bug it replaced, which at least terminated.
+      if [ "$(queue_halted)" = "yes" ]; then
+        echo "   $1 · CODA FERMA, nessuna run partira'" >&2
+        echo "halted"; return
+      fi
+      waits=$((waits + 1))
+      if [ "$waits" -ge "$MAX_WAITS" ]; then
+        echo "   $1 · nessuna run avviata dopo $((MAX_WAITS * 120 / 3600))h, rinuncio" >&2
+        echo "timeout"; return
+      fi
       echo "   $1 · in coda, in attesa che la run parta (id precedente: $prev_id) · $(date '+%H:%M:%S')" >&2
       sleep 120
       continue
@@ -104,6 +130,10 @@ for BRAND in $QUEUE; do
   fi
   echo "  regressione vendite: 0 sospetti"
   [ "$S" = "blocked" ] && { echo "!! BLOCCO. Riprendi con: curl -X POST $API/queue/resume"; exit 1; }
+  # A halted queue will not start anything for any brand, so carrying on would
+  # just repeat the same wait for each one in turn.
+  [ "$S" = "halted" ] && { echo "!! CODA FERMA. Riprendi con: curl -X POST $API/queue/resume"; exit 1; }
+  [ "$S" = "timeout" ] && echo "  !! $BRAND · run mai avviata, saltata"
   [ "$S" = "error" ] && echo "  !! $BRAND fallita anche al secondo tentativo"
   # partial requeues itself — not the transient failure this script retries
   # for, but silent here would hide that the sold check never ran.
