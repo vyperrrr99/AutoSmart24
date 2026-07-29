@@ -5,6 +5,7 @@ import itertools
 from typing import Callable, Iterable, Iterator
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from autosmart24.config import BrandConfig
@@ -396,7 +397,26 @@ def run_brand_sweep(
                 run.listings_seen = listings_seen
                 run.new_listings = len(new_ids)
                 run.price_changes = price_changes
-                session.commit()
+                try:
+                    session.commit()
+                except SQLAlchemyError as exc:
+                    # A batch that cannot be written costs its own few hundred
+                    # listings; before this it cost the entire brand. The rows
+                    # are not lost for good -- they carry no state of their own
+                    # yet, so the next sweep inserts them normally.
+                    #
+                    # seen_ids already holds this batch's ids and is deliberately
+                    # NOT rolled back: those listings were genuinely seen on the
+                    # site, so letting them fall into missing_ids would invite
+                    # exactly the false-sale path this project spent 29/07
+                    # closing.
+                    session.rollback()
+                    run.errors_count += 1
+                    _log_event(
+                        session, run, "error",
+                        f"Lotto di {len(batch_snippets)} annunci non scritto e saltato: {type(exc).__name__}",
+                    )
+                    session.commit()
         except BlockedError as exc:
             run.status = "blocked"
             run.phase = None

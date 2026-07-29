@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 import respx
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from autosmart24.config import BrandConfig
@@ -414,6 +415,81 @@ def test_run_brand_sweep_commits_each_batch_incrementally(db_session):
     assert run.new_listings == 5
     all_ids = {row.id for row in db_session.query(Listing).filter_by(brand="Fiat").all()}
     assert all_ids == {"batch-1", "batch-2", "batch-3", "batch-4", "batch-5"}
+
+
+def test_run_brand_sweep_survives_a_batch_whose_commit_fails(db_session, monkeypatch):
+    """Id reuse is the write failure we know about, not the only one possible.
+    A malformed value or a future schema change must cost its batch, not the
+    28,000 listings around it."""
+    calls = {"n": 0}
+    real_commit = db_session.commit
+
+    def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise IntegrityError("boom", None, Exception("synthetic"))
+        return real_commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        for i in range(10):
+            yield _fake_snippet(f"item-{i}", 1000 + i)
+
+    monkeypatch.setattr(db_session, "commit", flaky_commit)
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        fetch_detail_fn=_noop_fetch_detail,
+        concurrency=1, batch_size=5,
+    )
+    monkeypatch.undo()
+
+    assert run.status in ("success", "partial"), "the sweep must reach the end"
+    assert run.finished_at is not None
+    messages = [e.message for e in db_session.query(ScrapeEvent).all()]
+    assert any("lotto" in m.lower() for m in messages)
+
+
+def test_a_dropped_batch_does_not_send_its_listings_down_the_missing_path(db_session, monkeypatch):
+    """The listings of a dropped batch were genuinely on the site. Letting them
+    fall into missing_ids would hand them to the one code path that can declare
+    a sale -- reopening, from a new direction, the hole closed on 29/07."""
+    db_session.add(_existing_listing("item-0", 1000, detail_scraped=True))
+    db_session.commit()
+
+    calls = {"n": 0}
+    real_commit = db_session.commit
+
+    def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise IntegrityError("boom", None, Exception("synthetic"))
+        return real_commit()
+
+    def fake_crawl(client, brand_slug, make_id, **kwargs):
+        for i in range(10):
+            yield _fake_snippet(f"item-{i}", 1000 + i)
+
+    # run_worker_pool isolates a non-BlockedError raised by a job (see
+    # concurrency.py): it never escapes to fail this test on its own, it just
+    # drops that job silently. So the check that matters is not "did this
+    # raise" but "was item-0 ever handed to the missing-listing fetch" --
+    # recorded here and asserted below.
+    checked_ids: list[str] = []
+
+    def fetch_detail_fn(client, url):
+        checked_ids.append(url.rsplit("/", 1)[-1])
+        raise AssertionError("a listing seen on the site must not be checked as missing")
+
+    monkeypatch.setattr(db_session, "commit", flaky_commit)
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=fake_crawl,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1, batch_size=5,
+    )
+    monkeypatch.undo()
+
+    assert run.status in ("success", "partial"), "the sweep must reach the end"
+    assert run.finished_at is not None
+    assert "item-0" not in checked_ids, "a listing seen on the site must not be checked as missing"
+    assert db_session.get(Listing, "item-0").status == "active"
 
 
 def test_listing_accepts_cross_reference_id_longer_than_32_chars(db_session):
