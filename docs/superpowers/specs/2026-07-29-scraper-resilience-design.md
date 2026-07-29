@@ -94,7 +94,11 @@ Il crash da chiave duplicata non avviene in un worker ma scrivendo a database, q
 
 **Trattamento.** L'annuncio viene saltato, con un evento di livello `warning` che riporta id, marca a database e marca incontrata, e un incremento di `errors_count`. La scansione prosegue.
 
-**Rete di sicurezza generale.** Il riuso id è la causa che conosciamo, non l'unica possibile: un dato malformato o un futuro cambio di schema possono far fallire una scrittura in modi che non sappiamo prevedere. Il commit di un lotto viene quindi protetto da un punto di ripristino: se fallisce, il lotto viene riprovato riga per riga, ciascuna nel proprio punto di ripristino, e solo quelle che falliscono davvero vengono scartate e registrate. Il percorso lento scatta solo dopo un fallimento, quindi non costa nulla quando tutto funziona.
+**Rete di sicurezza generale.** Il riuso id è la causa che conosciamo, non l'unica possibile: un dato malformato o un futuro cambio di schema possono far fallire una scrittura in modi che non sappiamo prevedere. Il commit di un lotto viene quindi protetto: se fallisce, **il lotto viene scartato e registrato, e la scansione prosegue**.
+
+La granularità è il lotto, non la singola riga, ed è una scelta di rischio deliberata. Recuperare riga per riga richiederebbe di riprocessare il lotto rifacendo il confronto e la scrittura per ogni annuncio, cioè di estrarre e rifattorizzare il blocco di scrittura più critico del progetto — proprio quello che ha appena superato un ciclo di revisione. Il salto di grandezza che conta è già tutto nel primo passo: si perdono qualche centinaio di annunci invece di ventottomila, e quelli persi non portano stato proprio, quindi il giro successivo li inserisce normalmente. Scendere dal lotto alla riga aggiungerebbe un rischio reale per un guadagno marginale.
+
+C'è un dettaglio che questo passaggio non deve sbagliare: gli id del lotto scartato **restano** fra quelli visti. Erano davvero sul sito, e lasciarli cadere fra i mancanti li esporrebbe esattamente al percorso di falsa vendita che il lavoro del 29/07 ha chiuso.
 
 **Quel che questo componente non fa.** La riga vecchia resta come sta e l'auto nuova non viene catturata. È il limite già dichiarato dal documento sul riuso id: chiudere correttamente la riga obsoleta e assegnare all'auto nuova una chiave che non collida è un lavoro semantico più grande, che resta suo. Qui ci limitiamo a non far cadere la marca — e a registrare ogni occorrenza, così che la frequenza reale del fenomeno diventi finalmente misurabile invece che stimata su un solo caso.
 
@@ -143,7 +147,7 @@ Il difetto nasce da uno scenario che nessun test copriva, quindi si parte da lì
 
 **Riuso id.** Un annuncio il cui id esiste già sotto un'altra marca viene saltato con un evento, e la scansione **completa** e dichiara le vendite normalmente. È il caso Audi: il test deve verificare che la marca arriva in fondo, non solo che non esplode.
 
-**Scrittura rotta.** Un lotto in cui una riga fa fallire il commit deve salvare tutte le altre righe del lotto.
+**Scrittura rotta.** Un lotto il cui commit fallisce viene scartato e la scansione **arriva in fondo**, dichiarando le vendite normalmente. Il test verifica che la marca si completi, non solo che non esploda, e che gli annunci del lotto scartato non finiscano fra i mancanti.
 
 ## 12. Fuori perimetro
 
