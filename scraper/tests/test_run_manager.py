@@ -610,7 +610,15 @@ def test_process_detail_backlog_processes_every_pending_listing_across_db_pages(
 
 def test_process_detail_backlog_terminates_when_a_listing_cannot_be_processed(db_session):
     """A permanently failing detail page must not trap the paging loop in an
-    infinite retry that hammers the site."""
+    infinite retry that hammers the site.
+
+    Superseded 29/07: the pool used to make any non-BlockedError fatal, so
+    the poison listing killed this call outright and that was what stopped
+    the loop. Now that job is isolated by run_worker_pool itself -- it never
+    reaches ``handled``, so the existing park-unreported-rows logic below
+    excludes it from the next page query. The call now terminates by
+    finishing normally, not by raising.
+    """
     run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
     db_session.add(run)
     db_session.flush()
@@ -620,10 +628,12 @@ def test_process_detail_backlog_terminates_when_a_listing_cannot_be_processed(db
     def failing_fetch_detail(client, url):
         raise ValueError("permanently broken detail page")
 
-    with pytest.raises(ValueError):
-        process_detail_backlog(
-            db_session, _client, BRAND, run, db_page_size=1, fetch_detail_fn=failing_fetch_detail
-        )
+    total = process_detail_backlog(
+        db_session, _client, BRAND, run, db_page_size=1, fetch_detail_fn=failing_fetch_detail
+    )
+
+    assert total == 0
+    assert db_session.get(Listing, "poison-1").detail_scraped is False
 
 
 def test_run_brand_sweep_ignores_active_listings_older_than_the_year_floor(db_session):

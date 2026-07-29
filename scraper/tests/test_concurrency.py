@@ -62,17 +62,18 @@ def test_run_worker_pool_stops_and_raises_on_blocked_error():
     assert call_count["n"] == 6
 
 
-def test_run_worker_pool_reraises_non_blocked_exceptions_instead_of_swallowing_them():
-    """A worker raising anything other than BlockedError must surface to the
-    caller. Swallowing it would silently truncate the job list while the caller
-    sees a normal completion -- silent data loss."""
+def test_run_worker_pool_isolates_non_blocked_exceptions_instead_of_swallowing_the_run():
+    """A worker raising anything other than BlockedError must not truncate the
+    job list. Superseded 29/07: this used to be fatal (silent data loss via a
+    killed run); now the failing job is isolated and the rest complete."""
     def worker_fn(job, client):
         if job == 2:
             raise ValueError("boom")
         return [job]
 
-    with pytest.raises(ValueError, match="boom"):
-        list(run_worker_pool(list(range(5)), worker_fn, _client_factory, concurrency=1, session_refresh_requests=100))
+    assert sorted(
+        run_worker_pool(list(range(5)), worker_fn, _client_factory, concurrency=1, session_refresh_requests=100)
+    ) == [0, 1, 3, 4]
 
 
 def test_run_worker_pool_prefers_blocked_error_when_several_workers_fail():
@@ -185,3 +186,74 @@ def test_run_worker_pool_reraises_client_factory_failure_on_session_refresh():
 
     with pytest.raises(RuntimeError, match="refresh failed"):
         list(run_worker_pool(list(range(10)), worker_fn, flaky_factory, concurrency=1, session_refresh_requests=2))
+
+
+def test_run_worker_pool_isolates_a_failing_job_and_still_yields_the_others():
+    """One unreachable page must cost that page, not the whole brand.
+
+    Written against the pre-fix code this FAILS: the pool drained the queue on
+    the first exception and re-raised, so the surviving jobs never arrived.
+    """
+    def worker_fn(job, client):
+        if job == 3:
+            raise TimeoutError("timed out")
+        return [job * 2]
+
+    failures: list = []
+    results = sorted(
+        run_worker_pool(
+            list(range(6)), worker_fn, _client_factory,
+            concurrency=2, session_refresh_requests=100, failures=failures,
+        )
+    )
+
+    assert results == [0, 2, 4, 8, 10]
+    assert [f.job for f in failures] == [3]
+    assert isinstance(failures[0].error, TimeoutError)
+
+
+def test_run_worker_pool_still_aborts_everything_on_a_block():
+    """A block is the one case where continuing makes things worse."""
+    started = threading.Event()
+
+    def worker_fn(job, client):
+        started.set()
+        raise BlockedError(403, f"https://example.test/{job}")
+
+    failures: list = []
+    with pytest.raises(BlockedError):
+        list(
+            run_worker_pool(
+                list(range(20)), worker_fn, _client_factory,
+                concurrency=1, session_refresh_requests=100, failures=failures,
+            )
+        )
+    assert started.is_set()
+    assert failures == []
+
+
+def test_run_worker_pool_without_a_failures_list_still_isolates_the_job():
+    """Callers that infer failure from missing results need no accumulator."""
+    def worker_fn(job, client):
+        if job == 1:
+            raise ValueError("boom")
+        return [job]
+
+    assert sorted(
+        run_worker_pool(
+            [0, 1, 2], worker_fn, _client_factory,
+            concurrency=1, session_refresh_requests=100,
+        )
+    ) == [0, 2]
+
+
+def test_run_worker_pool_client_factory_failure_is_still_fatal():
+    """A factory that cannot build a client is systemic, not a bad page."""
+    def factory():
+        raise RuntimeError("no client")
+
+    def worker_fn(job, client):
+        raise AssertionError("must not be called")
+
+    with pytest.raises(RuntimeError):
+        list(run_worker_pool([1, 2], worker_fn, factory, concurrency=1, session_refresh_requests=100))

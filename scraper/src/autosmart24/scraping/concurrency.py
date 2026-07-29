@@ -11,6 +11,12 @@ Invariants that are load-bearing — change these only deliberately:
   the marker is provably behind every result. No result can be lost.
 * Results arrive in completion order, not submission order. Callers must
   not depend on ordering.
+* A job whose ``worker_fn`` raises anything other than ``BlockedError`` is
+  isolated: the failure is recorded in the caller's ``failures`` list and the
+  remaining jobs still run. ``BlockedError``, a failure of
+  ``client_factory``, and non-``Exception`` throwables remain fatal and still
+  drain the queue. Callers that pass no ``failures`` list still get the
+  isolation — they simply cannot tell which job was lost.
 * Captured worker errors are re-raised only when the generator runs to
   completion. If the consumer abandons the generator (``close()``, or an
   exception in the consumer's own loop body), ``GeneratorExit`` propagates
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from dataclasses import dataclass
 from typing import Callable, Iterator, TypeVar
 
 from autosmart24.scraping.http_client import BlockedError, RateLimitedClient
@@ -39,15 +46,29 @@ JobT = TypeVar("JobT")
 ResultT = TypeVar("ResultT")
 
 
+@dataclass
+class JobFailure:
+    """One job that could not be completed. The rest of the queue is unaffected."""
+
+    job: object
+    error: BaseException
+
+
 def run_worker_pool(
     jobs: list[JobT],
     worker_fn: Callable[[JobT, RateLimitedClient], list[ResultT]],
     client_factory: Callable[[], RateLimitedClient],
     concurrency: int,
     session_refresh_requests: int,
+    failures: list[JobFailure] | None = None,
 ) -> Iterator[ResultT]:
     if not jobs:
         return
+
+    # Callers that can infer failure from a missing result (the detail backlog
+    # parks unreported rows; the confirmation pass simply declares nothing)
+    # pass no list and read nothing back.
+    failure_sink = failures if failures is not None else []
 
     concurrency = max(1, concurrency)
     session_refresh_requests = max(1, session_refresh_requests)
@@ -83,7 +104,20 @@ def run_worker_pool(
                     client.close()
                     client = client_factory()
                     processed = 0
-                job_results = worker_fn(job, client)
+                try:
+                    job_results = worker_fn(job, client)
+                except BlockedError:
+                    # The site is refusing us. Pressing on lengthens the block,
+                    # so this stays fatal and reaches the outer handler below.
+                    raise
+                except Exception as exc:
+                    # One unreachable page costs that page. Counted as processed
+                    # so the session-refresh cadence still advances: a client
+                    # that just failed is a client worth rotating.
+                    with error_lock:
+                        failure_sink.append(JobFailure(job, exc))
+                    processed += 1
+                    continue
                 processed += 1
                 for item in job_results:
                     results.put(item)
