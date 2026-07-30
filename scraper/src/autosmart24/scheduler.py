@@ -53,7 +53,18 @@ class BrandScheduler:
         # generous, like the 3600s this used to be -- will already have
         # elapsed by execution time and the job is silently discarded: no
         # run row, no event, nothing on the dashboard.
+        #
+        # The timezone is stated explicitly because the container runs UTC
+        # while the operator configuring a brand thinks in Italian local time.
+        # Left to the default, a brand set to 22:00 would sweep at midnight --
+        # and the error would not even be a constant one to learn around: it
+        # would change by an hour at each daylight-saving switch. Naming the
+        # zone keeps a configured hour meaning that hour all year.
+        #
+        # This does NOT affect the timestamps written to the database, which
+        # stay naive UTC via datetime.utcnow() throughout the project.
         self.scheduler = scheduler or BackgroundScheduler(
+            timezone="Europe/Rome",
             executors={"default": ThreadPoolExecutor(max_workers=1)},
             job_defaults={"misfire_grace_time": None, "max_instances": 1},
         )
@@ -68,7 +79,15 @@ class BrandScheduler:
     ) -> None:
         self.scheduler.add_job(
             run_fn,
-            trigger=CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute),
+            # The timezone must be handed to the trigger, not left to the
+            # scheduler: CronTrigger is built here, before add_job, and its
+            # constructor captures the PROCESS timezone (UTC in the container)
+            # rather than inheriting the scheduler's. Setting the scheduler's
+            # zone alone looks right and silently schedules two hours late.
+            trigger=CronTrigger(
+                day_of_week=day_of_week, hour=hour, minute=minute,
+                timezone=self.scheduler.timezone,
+            ),
             id=brand.slug,
             replace_existing=True,
             args=[brand],
