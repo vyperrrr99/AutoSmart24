@@ -3,7 +3,7 @@
 Documento di consegna per aprire una sessione Claude Code nuova sul progetto
 di business intelligence per l'usato, con i dati raccolti da AutoSmart24.
 
-Aggiornato al **29/07/2026 19:45**.
+Aggiornato al **31/07/2026**.
 
 ---
 
@@ -75,7 +75,7 @@ con lo schema commentato e `schema.sql` col DDL completo.
 
 Più piccolo del database e sufficiente per progettare. Da rigenerare quando
 servono dati aggiornati: al momento dell'estratto i venduti erano 6.961, oggi
-sono 11.501.
+sono **17.574**.
 
 ### API di sola lettura
 
@@ -89,10 +89,10 @@ leggere gli annunci.
 
 | | |
 |---|---|
-| annunci | 305.427 |
-| attivi | 293.926 |
-| venduti | 11.501 |
-| non ancora arricchiti | 13.954 |
+| annunci | 311.132 |
+| attivi | 293.558 |
+| venduti | 17.574 |
+| non ancora arricchiti | 6.463 |
 | marche | 25 |
 | raccolta iniziata | **24/07/2026** |
 | finestra temporale | ultimi **10 anni** di immatricolazione |
@@ -100,11 +100,11 @@ leggere gli annunci.
 Le 25 marche coprono gran parte del mercato italiano, ma non sono un
 censimento: le marche fuori elenco non compaiono affatto.
 
-**Un'eccezione da conoscere:** i venduti di **Audi** sono fermi al 28/07 e
-provengono da un'altra macchina. Un difetto dello scraper — id riassegnati da
-AutoScout — ha fatto fallire la sua scansione cinque volte, e la rilevazione
-vendite non è mai girata. È in corso di correzione. Fino ad allora **Audi non è
-confrontabile con le altre marche** sui tempi di vendita.
+Tutte e 25 le marche sono state aggiornate integralmente il **30/07**, in un
+giro unico di 9h34m concluso senza errori. Audi, che per cinque tentativi era
+caduta su un id riassegnato da AutoScout e la cui rilevazione vendite non era
+mai girata, è stata recuperata: 1.791 venduti, di cui 980 dichiarati in quel
+giro. **Tutte le marche sono ora confrontabili fra loro.**
 
 ---
 
@@ -177,8 +177,9 @@ segnale li distingue.
 **Storia della qualità di questo campo.** Fino al 28/07 un difetto leggeva un
 errore transitorio del sito come rimozione: sono stati individuati e riportati
 ad `active` **268 record**, e la causa è stata corretta il 29/07. Il fix ha poi
-retto 13h34m su 24 marche con zero falsi positivi. I dati attuali sono
-successivi alla correzione e verificati aprendo le pagine.
+retto due giri completi — 13h34m su 24 marche e 9h34m su tutte e 25 — con zero
+falsi positivi in entrambi. I dati attuali sono successivi alla correzione e
+verificati aprendo le pagine.
 
 Il criterio che identifica un falso storico, se dovesse mai riapparire: un
 annuncio dichiarato venduto **meno di un'ora** dopo essere stato visto vivo.
@@ -193,7 +194,7 @@ Oggi ce ne sono zero.
   `listings.id` come chiave permanente di un veicolo fisico in analisi che
   attraversano il tempo.
 - **Gli annunci non arricchiti hanno solo i campi della lista di ricerca**
-  (`detail_scraped = false`, 13.954 righe). Niente `created_at_source`, quindi
+  (`detail_scraped = false`, 6.463 righe). Niente `created_at_source`, quindi
   vanno esclusi da ogni analisi temporale.
 - **`province` è popolata solo al 27,9%.** Per la geografia usare
   `latitude`/`longitude`, oppure ricavare la provincia dal CAP.
