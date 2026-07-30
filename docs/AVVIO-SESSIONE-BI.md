@@ -17,7 +17,7 @@ incollare questo:
 > produzione, AutoSmart24, che raccoglie gli annunci di autoscout24.it.
 >
 > Prima di qualunque cosa leggi `/home/vperrone/AutoSmart24/docs/AVVIO-SESSIONE-BI.md`:
-> contiene come accedere ai dati, lo stato della raccolta e — soprattutto — tre
+> contiene come accedere ai dati, lo stato della raccolta e — soprattutto — quattro
 > insidie metodologiche che invalidano le analisi più ovvie se ignorate.
 >
 > Poi leggi `/home/vperrone/AutoSmart24/export-bi/README.md`, che documenta lo
@@ -108,7 +108,7 @@ confrontabile con le altre marche** sui tempi di vendita.
 
 ---
 
-## 4. Le tre insidie
+## 4. Le quattro insidie
 
 Sono la parte di questo documento che conta di più. Ognuna produce un numero
 che sembra plausibile ed è sbagliato.
@@ -141,7 +141,33 @@ ancora attivi entrano come osservazioni censurate invece di essere esclusi.
 Se l'app deve mostrare un tempo medio di vendita già ora, va accompagnato dalla
 finestra di osservazione, mai presentato come valore assoluto.
 
-### 4.3 `status = 'sold'` significa "sparito dal sito"
+### 4.3 Il dataset contiene auto nuove mescolate alle usate
+
+Circa **11.000 annunci attivi** (3,8%) non hanno `first_registration`. Non è un
+dato mancante: sono auto **mai immatricolate**, quindi quella data non esiste.
+Misurato il 30/07:
+
+| | annunci | prezzo medio |
+|---|---|---|
+| km non dichiarati | 7.339 | 51.181 € |
+| 0-100 km (nuova o km 0) | 3.698 | 46.133 € |
+| oltre 5.000 km | **1** | — |
+
+Contro il resto del database: **24.221 € di media e 75.315 km**.
+
+Costano circa il doppio. Qualunque analisi di prezzo che non le separi sbaglia
+verso l'alto, e in modo **non uniforme fra le marche**, perché le premium ne
+hanno di più — quindi l'errore non si annulla nei confronti.
+
+Il filtro è `first_registration IS NULL`, che qui coincide quasi perfettamente
+con "nuova o km 0": un solo annuncio su 11.043 sfugge alla regola.
+
+I ~3.700 con chilometraggio dichiarato a zero sono **km 0** — auto immatricolate
+dal concessionario e rivendute. Non sono rumore: sono un segmento di mercato con
+una sua dinamica di prezzo, che vale la pena analizzare separatamente invece di
+scartare.
+
+### 4.4 `status = 'sold'` significa "sparito dal sito"
 
 L'annuncio non è più raggiungibile ed è stato confermato rimosso da due
 verifiche indipendenti. Nella grande maggioranza dei casi è una vendita, ma un
