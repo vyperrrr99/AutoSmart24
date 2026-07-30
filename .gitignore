@@ -6,3 +6,12 @@ dist/
 .env
 *.dump
 dashboard/tsconfig.tsbuildinfo
+
+# Operational output, not source: run logs, ad-hoc data extracts, dumps.
+# These accumulate every night and one of them is 15 MB; the repository is
+# public, so they are kept out deliberately rather than by remembering.
+*.log
+export-bi/*.csv
+export-bi/schema.sql
+falsi-venduti-*.csv
+autosmart24-dataset-*.tar.gz
