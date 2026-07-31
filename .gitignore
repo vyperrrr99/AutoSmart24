@@ -17,3 +17,4 @@ falsi-venduti-*.csv
 autosmart24-dataset-*.tar.gz
 campione-vehicle.jsonl
 equipaggiamenti-catalogo.*
+.env.supabase
