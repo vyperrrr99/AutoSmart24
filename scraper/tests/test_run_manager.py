@@ -1497,7 +1497,8 @@ def test_run_brand_sweep_skips_new_and_km_zero_cars(db_session):
         never_registered = {**_fake_snippet("new-1", 49000), "first_registration": None, "mileage_km": None}
         km_zero = {**_fake_snippet("km0-1", 33000), "mileage_km": 0}
         just_run_in = {**_fake_snippet("km0-2", 31000), "mileage_km": 90}
-        return iter([used, never_registered, km_zero, just_run_in])
+        ex_demo = {**_fake_snippet("km0-3", 29000), "mileage_km": 800}
+        return iter([used, never_registered, km_zero, just_run_in, ex_demo])
 
     run = run_brand_sweep(
         db_session, _client, BRAND, crawl_fn=crawl_fn,
@@ -1505,7 +1506,7 @@ def test_run_brand_sweep_skips_new_and_km_zero_cars(db_session):
     )
 
     assert db_session.get(Listing, "used-1") is not None, "a real used car must still be collected"
-    for skipped in ("new-1", "km0-1", "km0-2"):
+    for skipped in ("new-1", "km0-1", "km0-2", "km0-3"):
         assert db_session.get(Listing, skipped) is None, f"{skipped} should not have been stored"
     assert run.new_listings == 1, "only the used car counts as new"
 
@@ -1559,3 +1560,28 @@ def test_a_skipped_car_is_never_treated_as_a_missing_listing(db_session):
 
     assert db_session.get(Listing, "km0-1").status == "active", "must not be declared sold"
     assert run.sold_detected == 0
+
+
+def test_the_used_car_threshold_is_exclusive_at_1000_km(db_session):
+    """1000 km is the boundary shared with the BI layer's `is_km_zero`.
+
+    Asserted as behaviour rather than by reading the constant: a test on the
+    number itself passes whichever way the comparison is written, and an
+    off-by-one here silently changes what the whole product means by "used".
+    """
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.finished = True
+        return iter([
+            {**_fake_snippet("just-under", 30000), "mileage_km": 999},
+            {**_fake_snippet("exactly", 30000), "mileage_km": 1000},
+        ])
+
+    run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=lambda c, u: DetailResult(sold=False, data=_fake_detail_data(u)), concurrency=1,
+    )
+
+    assert db_session.get(Listing, "just-under") is None, "999 km is not a used car"
+    assert db_session.get(Listing, "exactly") is not None, "1000 km is"

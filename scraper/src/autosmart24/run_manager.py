@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from autosmart24.config import NEW_CAR_MAX_KM, BrandConfig
+from autosmart24.config import MIN_USED_CAR_KM, BrandConfig
 from autosmart24.db.dealers import upsert_dealer
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.scraping.change_detection import diff_sweep
@@ -287,7 +287,7 @@ def run_brand_sweep(
                 # sold used car.
                 skipped_new = {
                     lid for lid, snip in batch_snippets.items()
-                    if snip["mileage_km"] is None or snip["mileage_km"] <= NEW_CAR_MAX_KM
+                    if snip["mileage_km"] is None or snip["mileage_km"] < MIN_USED_CAR_KM
                 }
                 if skipped_new:
                     new_car_skipped += len(skipped_new)
@@ -473,7 +473,7 @@ def run_brand_sweep(
             _log_event(
                 session, run, "info",
                 f"Saltate {new_car_skipped} auto nuove o km 0 (chilometraggio "
-                f"assente o <= {NEW_CAR_MAX_KM}): raccogliamo solo usate",
+                f"assente o sotto {MIN_USED_CAR_KM} km): raccogliamo solo usate",
             )
 
         coverage = assess_coverage(
