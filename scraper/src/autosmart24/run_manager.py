@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from autosmart24.config import BrandConfig
+from autosmart24.config import NEW_CAR_MAX_KM, BrandConfig
 from autosmart24.db.dealers import upsert_dealer
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.scraping.change_detection import diff_sweep
@@ -233,6 +233,7 @@ def run_brand_sweep(
     # the dashboard and the monitoring scripts' per-brand report line.
     reused_ids: set[str] = set()
     listings_seen = 0
+    new_car_skipped = 0
     price_changes = 0
 
     try:
@@ -274,6 +275,25 @@ def run_brand_sweep(
                 batch_size,
             ):
                 batch_snippets = {s["id"]: s for s in batch}
+                # New and km-0 cars are dropped here, at collection, rather
+                # than cleaned out of the database afterwards: the searches DO
+                # return them, so a delete would be undone by the next sweep
+                # while leaving the database looking fixed for a few hours.
+                #
+                # Their ids still go into seen_ids below. They were on the
+                # site, and a listing absent from seen_ids falls into
+                # missing_ids -- the only path in this project that can declare
+                # a sale. A car dropped for being new must not come back as a
+                # sold used car.
+                skipped_new = {
+                    lid for lid, snip in batch_snippets.items()
+                    if snip["mileage_km"] is None or snip["mileage_km"] <= NEW_CAR_MAX_KM
+                }
+                if skipped_new:
+                    new_car_skipped += len(skipped_new)
+                    seen_ids.update(skipped_new)
+                    for lid in skipped_new:
+                        del batch_snippets[lid]
                 batch_prices = {listing_id: s["price"] for listing_id, s in batch_snippets.items()}
                 diff = diff_sweep(batch_prices, active_db_prices)
                 now = _now()
@@ -445,6 +465,16 @@ def run_brand_sweep(
             _log_event(session, run, "blocked", str(exc), url=exc.url)
             session.commit()
             return run
+
+        if new_car_skipped:
+            # Visible per run: this silently removes ~11% of what the site
+            # offers, and a rule that quietly drops a tenth of the input should
+            # say so on the only monitoring channel this project has.
+            _log_event(
+                session, run, "info",
+                f"Saltate {new_car_skipped} auto nuove o km 0 (chilometraggio "
+                f"assente o <= {NEW_CAR_MAX_KM}): raccogliamo solo usate",
+            )
 
         coverage = assess_coverage(
             lost_models=len(crawl_report.lost_models),

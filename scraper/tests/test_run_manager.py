@@ -1474,3 +1474,88 @@ def test_run_brand_sweep_still_relists_a_reappearing_listing_of_the_same_brand(d
     row = db_session.get(Listing, "back-1")
     assert row.status == "active"
     assert row.sold_at is None
+
+
+def test_run_brand_sweep_skips_new_and_km_zero_cars(db_session):
+    """The product is about used cars; these are not used cars.
+
+    Measured on 296,685 live listings: 11,041 have never been registered
+    (49,543 EUR average) and 20,895 are dealer-registered with zero mileage at
+    nine months old (33,557 EUR) -- against 23,408 EUR and 81,217 km for real
+    used cars. Left in, they pull every price statistic upward, and unevenly
+    across makes because the premium brands carry more of them.
+
+    Skipping happens at collection because these listings ARE returned by the
+    searches: deleting them from the database alone would see them reinserted
+    by the next sweep, which is worse than leaving them -- it looks fixed.
+    """
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.finished = True
+        used = _fake_snippet("used-1", 12000)
+        never_registered = {**_fake_snippet("new-1", 49000), "first_registration": None, "mileage_km": None}
+        km_zero = {**_fake_snippet("km0-1", 33000), "mileage_km": 0}
+        just_run_in = {**_fake_snippet("km0-2", 31000), "mileage_km": 90}
+        return iter([used, never_registered, km_zero, just_run_in])
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=lambda c, u: DetailResult(sold=False, data=_fake_detail_data(u)), concurrency=1,
+    )
+
+    assert db_session.get(Listing, "used-1") is not None, "a real used car must still be collected"
+    for skipped in ("new-1", "km0-1", "km0-2"):
+        assert db_session.get(Listing, skipped) is None, f"{skipped} should not have been stored"
+    assert run.new_listings == 1, "only the used car counts as new"
+
+
+def test_run_brand_sweep_keeps_a_used_car_whose_mileage_looks_odd(db_session):
+    """A missing registration date is not on its own enough to discard a car.
+
+    Five live listings have no date but real mileage (500-8,000 km): data
+    errors on genuine cars, not new stock. The rule keys on mileage alone, so
+    they survive -- asserted here so a later 'simplification' to the date
+    cannot quietly start dropping them.
+    """
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.finished = True
+        return iter([{**_fake_snippet("odd-1", 36500), "first_registration": None, "mileage_km": 8000}])
+
+    run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=lambda c, u: DetailResult(sold=False, data=_fake_detail_data(u)), concurrency=1,
+    )
+
+    assert db_session.get(Listing, "odd-1") is not None
+
+
+def test_a_skipped_car_is_never_treated_as_a_missing_listing(db_session):
+    """A skipped listing was on the site, so it must not fall into missing_ids.
+
+    That set feeds the only code path able to declare a sale. A car dropped for
+    being new must not come back as a sold used car.
+    """
+    db_session.add(_existing_listing("km0-1", price=33000))
+    db_session.commit()
+    checked: list[str] = []
+
+    def crawl_fn(client_factory, slug, make_id, year_from=None, concurrency=1,
+                 session_refresh_requests=30, report=None):
+        if report is not None:
+            report.finished = True
+        return iter([_fake_snippet("used-1", 12000), {**_fake_snippet("km0-1", 33000), "mileage_km": 0}])
+
+    def fetch_detail_fn(client, url):
+        checked.append(url)
+        return DetailResult(sold=True)
+
+    run = run_brand_sweep(
+        db_session, _client, BRAND, crawl_fn=crawl_fn,
+        fetch_detail_fn=fetch_detail_fn, concurrency=1,
+    )
+
+    assert db_session.get(Listing, "km0-1").status == "active", "must not be declared sold"
+    assert run.sold_detected == 0
