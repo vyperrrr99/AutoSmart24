@@ -107,6 +107,32 @@ def create_app(
         if row.paused:
             scheduler.pause_brand(row.slug)
 
+    @app.get("/scheduler/jobs")
+    def scheduler_jobs():
+        """What the scheduler actually intends to do, and when.
+
+        Added after a nightly trigger silently failed to fire: everything
+        outside the scheduler looked healthy -- brands active, queue free,
+        container up -- and there was no way to ask the one component that
+        decides when work happens whether it still held the jobs at all.
+        """
+        jobs = []
+        for job in scheduler.scheduler.get_jobs():
+            nxt = getattr(job, "next_run_time", None)
+            jobs.append({
+                "id": job.id,
+                "next_run": nxt.isoformat() if nxt else None,
+                "paused": nxt is None,
+                "trigger": str(job.trigger),
+            })
+        jobs.sort(key=lambda j: (j["next_run"] is None, j["next_run"] or "", j["id"]))
+        return {
+            "running": scheduler.scheduler.running,
+            "timezone": str(scheduler.scheduler.timezone),
+            "job_count": len(jobs),
+            "jobs": jobs,
+        }
+
     @app.get("/brand-catalog", response_model=list[BrandCatalogEntryOut])
     def get_brand_catalog(session: Session = Depends(get_session)):
         rows = session.execute(select(BrandCatalog).order_by(BrandCatalog.display_name)).scalars().all()

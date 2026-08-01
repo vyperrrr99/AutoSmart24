@@ -20,6 +20,15 @@ from autosmart24.scraping.rate_control import BlockRateTracker
 
 logger = logging.getLogger(__name__)
 
+# APScheduler's own logging is off by default under uvicorn, which made a
+# missed nightly trigger on 01/08 undiagnosable: no record of the job firing,
+# being skipped, or erroring -- the absence of warnings proved nothing because
+# no warnings could have appeared. Silence from the component that decides when
+# the whole product runs is not something to find out about twice.
+logging.getLogger("apscheduler").setLevel(logging.INFO)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
+
 MIN_DELAY_SECONDS = float(os.environ.get("SCRAPE_MIN_DELAY_SECONDS", "3"))
 MAX_DELAY_SECONDS = float(os.environ.get("SCRAPE_MAX_DELAY_SECONDS", "8"))
 CONCURRENCY = max(1, int(os.environ.get("SCRAPE_CONCURRENCY", "6")))
