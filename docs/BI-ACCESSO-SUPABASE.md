@@ -1,25 +1,50 @@
 # Accesso al database per l'applicazione BI
 
-Da passare alla sessione che sviluppa AutoSmart-BI. Aggiornato al **01/08/2026**.
+Da passare alla sessione che sviluppa AutoSmart-BI. Aggiornato al **03/08/2026**.
+
+Sostituisce la versione del 01/08: cambiano gli stati degli annunci e c'è un
+problema di orario da correggere.
 
 ---
 
-## 1. Cosa è cambiato rispetto alla spec del 31/07
+## 1. Da leggere per primo: due cose urgenti
 
-La spec prevedeva di leggere il PostgreSQL locale dello scraper su
-`localhost:5434`. **Non è più così.** I dati vivono ora anche su **Supabase**, e
-l'applicazione legge da lì.
+### 1.1 Lo snapshot delle 04:15 fotografa dati sbagliati
 
-Cambiano tre cose:
+Nel crontab c'è:
 
-- **La connessione**: Supabase, non `localhost`.
-- **Dove vive lo schema `bi`**: su Supabase, accanto ai dati, non sulla macchina
-  dello scraper. Le migrazioni Alembic vanno puntate lì.
-- **La freschezza**: i dati sono una copia rigenerata ogni mattina, non una
-  vista in tempo reale. Vedi §4.
+```
+15 4 * * *  cd /home/vperrone/AutoSmart-BI && ... scripts/snapshot_giornaliero.py
+```
 
-Tutto il resto della spec resta valido, incluso il principio che
-`public` è di proprietà dello scraper e l'applicazione non ci scrive mai.
+A quell'ora succedono due cose che lo rendono inaffidabile:
+
+- **Lo scraper sta ancora lavorando.** Il giro parte alle 22:00 e finisce fra le
+  04:00 e le 06:00. Alle 04:15 sono passate circa venti marche su ventisei: lo
+  snapshot fotografa un database a metà aggiornamento, con alcune marche di
+  stanotte e altre di ieri, e nulla nei dati permette di distinguerle.
+- **Le vendite non sono ancora state ripulite.** La riclassificazione (§4) gira
+  alle 09:00. Alle 04:15 il campo `sold` contiene ancora tutte le sparizioni,
+  comprese quelle che non sono vendite — sul giro del 02/08 erano **1.305 su
+  4.014, un terzo**.
+
+**Spostatelo dopo le 09:15.** A quell'ora il giro è finito, le vendite sono
+riclassificate e la copia su Supabase è aggiornata.
+
+### 1.2 Le migrazioni vanno applicate anche su Supabase
+
+La sincronizzazione notturna copia **i dati, non lo schema**. Una colonna
+aggiunta da una parte e non dall'altra fa fallire la pubblicazione.
+
+È già successo: la migrazione `0008` ha aggiunto `removal_reason` qui e non là.
+Ora la sincronizzazione se ne accorge prima e rifiuta di pubblicare con un
+messaggio esplicito, invece di fallire su un errore di colonna alle nove del
+mattino senza nessuno a guardare.
+
+Se create oggetti nello schema `bi` che dipendono da `public`, ricordate che
+ogni mattina `public` viene svuotato e ricaricato: viste materializzate
+sopravvivono (vanno solo riaggiornate), vincoli di chiave esterna verso
+`public` **no**.
 
 ---
 
@@ -32,122 +57,146 @@ Database postgres
 Utente   postgres.ofbmvgwskvcsyleauyhu
 ```
 
-La password è nel file `/home/vperrone/AutoSmart24/.env.supabase` sulla macchina
-dello scraper, modo 600 ed escluso da git. **Chiedila all'utente**: non va
-committata, e il repository AutoSmart24 è pubblico.
+Password in `/home/vperrone/AutoSmart24/.env.supabase` sulla macchina dello
+scraper, modo 600 ed escluso da git. **Chiedetela all'utente**: il repository
+AutoSmart24 è pubblico.
 
-Nella stringa di connessione la password va **codificata per URL** — contiene un
-carattere `@`, che altrimenti verrebbe letto come separatore dell'host.
+Nella stringa di connessione va **codificata per URL** — contiene un `@`, che
+altrimenti verrebbe letto come separatore dell'host.
 
 Usare il **pooler**, non la connessione diretta: `db.<ref>.supabase.co` risolve
-solo in IPv6 sul piano gratuito, mentre il pooler risponde anche in IPv4.
+solo in IPv6 sul piano gratuito, il pooler risponde anche in IPv4.
 
 PostgreSQL sul server è la **17.6**; lo scraper gira sulla 16.
 
 ---
 
-## 3. Cosa c'è, e cosa no
+## 3. Gli stati di un annuncio: da quattro, non più da due
 
-Cinque tabelle, in `public`:
+Questa è la modifica più importante rispetto alla versione precedente.
 
-| tabella | righe (01/08) | contenuto |
+| stato | significato | conta come vendita? |
 |---|---|---|
-| `listings` | 286.300 | l'annuncio: auto, prezzo, venditore, stato |
-| `price_history` | 304.184 | ogni variazione di prezzo osservata |
-| `dealers` | 7.884 | i concessionari |
-| `brand_catalog` | 290 | tutte le marche esistenti su AutoScout |
-| `tracked_brands` | 26 | le marche raccolte, con la loro configurazione |
+| `active` | in vendita adesso | no |
+| `sold` | **venduto**, per quanto possiamo saperlo | **sì** |
+| `quarantine` | sparito insieme a tutto lo stock del concessionario: probabile chiusura, in attesa | **no, non ancora** |
+| `removed` | sparito ma **accertato non venduto** | no, mai |
 
-**Non sono state copiate** `scrape_events` e `scrape_runs`: sono la telemetria
-dello scraper, non servono all'analisi e peserebbero altri 9 MB su un piano da
-500. Se serve sapere quanto è aggiornato un dato, si ricava da
-`listings.last_seen_at`.
+Stato al 03/08, con un giro ancora in corso: 262.360 attivi, 30.257 venduti,
+875 in quarantena, 430 rimossi.
 
-Stato al 01/08: **263.916 attivi, 22.384 usciti**. Occupazione attuale 252 MB
-sui 500 del piano gratuito, con una crescita di circa 1 MB al giorno: restano
-**quattro o cinque mesi** prima di dover passare al piano a pagamento.
+**Per la BI la regola è semplice: `status = 'sold'`.** Gli altri tre non sono
+vendite e non vanno contati, nemmeno parzialmente.
 
----
+La colonna `removal_reason` dice perché un annuncio non è una vendita:
 
-## 4. Il dato è una copia notturna, non una vista in tempo reale
+| valore | cosa significa |
+|---|---|
+| `twin_on_sale` | lo stesso concessionario ha ancora in vendita un'auto identica per marca, modello, anno, alimentazione, trazione e chilometraggio. Se si fosse venduta sarebbero spariti entrambi gli annunci |
+| `republished` | l'annuncio è ricomparso sotto un id nuovo, con riferimento interno del concessionario **e** impronta dell'auto concordi |
+| `dealer_closure` | tutto lo stock del venditore è sparito in una notte — almeno 5 auto e oltre il 50%. In quarantena |
+| `quarantine_expired` | era in quarantena, è rimasto invisibile 30 giorni: **è una vendita**, ma provata dall'assenza e non osservata |
 
-Lo scraper gira ogni sera alle 22:00 e finisce verso le 8:00. Alle **09:00** un
-lavoro pianificato ricopia tutto su Supabase.
-
-Due conseguenze da tenere presenti nel progetto:
-
-- **Fra le 09:00 e le 09:00 del giorno dopo i dati non cambiano.** Le viste
-  materializzate possono essere aggiornate una volta al giorno e non hanno
-  bisogno di logiche di invalidazione.
-- **La copia è un `TRUNCATE` più ricarica in un'unica transazione.** Chi legge
-  vede la copia di ieri finché quella nuova non è completa, mai una tabella a
-  metà. Ma qualunque oggetto che dipenda da queste tabelle deve sopravvivere a
-  un `TRUNCATE`: viste materializzate sì (vanno solo riaggiornate dopo), vincoli
-  di chiave esterna verso `public` **no** — non crearne dallo schema `bi`.
-
-Se la sincronizzazione fallisce, l'applicazione mostra i dati del giorno prima
-invece di rompersi. Il log è in `sync-supabase.log` sulla macchina dello scraper.
+`quarantine_expired` è l'unico che compare su righe `sold`. Se vi serve
+distinguere le vendite osservate da quelle dedotte, è quel campo.
 
 ---
 
-## 5. Due decisioni dello scraper che cambiano la spec
+## 4. Perché esiste la riclassificazione
 
-### 5.1 Le auto non usate non arrivano più: `is_km_zero` è morto
+Un annuncio che sparisce dai risultati di ricerca è **l'unica prova** che
+questo progetto ha di una vendita. È una prova debole, e tre cose la imitano.
 
-La spec definiva `is_km_zero` come `mileage_km < 1000`, escludendole dalla curva
-chilometri↔prezzo ma mantenendole con un filtro dedicato.
+Misurato su una settimana di dati veri: **5.366 sparizioni su 26.536 — una su
+cinque — avevano un'auto identica ancora in vendita dallo stesso
+concessionario**, e una singola notte ha mostrato 50 concessionari perdere il
+100% dello stock in una volta.
 
-**Lo scraper ora le scarta alla fonte**, con esattamente la stessa soglia, e le
-esistenti sono state rimosse dal database: 34.703 il 31/07, altre 1.429
-all'allineamento della soglia. `is_km_zero` troverà sempre zero righe.
+Il tempo di vendita è la metrica su cui costruite l'applicazione. Ognuna di
+queste lasciata come vendita non è rumore attorno a un valore vero: è un evento
+inventato che tira la mediana verso il basso.
 
-Toglietelo, o lasciatelo come rete di sicurezza, ma non progettateci sopra
-analisi: quel segmento non esiste più nei dati.
+Due delle tre regole **osservano**, una **deduce**, e sono trattate
+diversamente. Il gemello ancora in vendita e la ripubblicazione sono fatti
+verificabili aprendo un URL. La sparizione in blocco è un'inferenza, e può
+sbagliare nella direzione opposta: un concessionario disordinato può lasciare
+online auto già vendute e ripulire il magazzino una volta al mese, nel qual
+caso quella sparizione **è** un blocco di vendite vere registrate in ritardo.
+Per questo aspetta trenta giorni invece di decidere.
 
-Motivo della decisione: erano 11.041 auto mai immatricolate (49.543 € di media)
-e 20.895 km 0 immatricolate da nove mesi (33.557 €), contro 23.408 € e 81.217 km
-delle usate vere. Tenute dentro spingevano ogni statistica di prezzo verso
-l'alto, **in modo diverso da marca a marca** perché le premium ne hanno di più —
-quindi l'errore non si annullava nei confronti.
+**`sold_at` sopravvive alla quarantena** e registra quando l'auto è sparita, non
+quando l'abbiamo accettato. Risolvere con la data di conferma aggiungerebbe un
+mese al tempo di vendita di ogni auto passata di lì.
 
-Il database contiene ora solo auto usate: **81.615 km e 23.285 €** di media.
+---
 
-### 5.2 I numeri della spec sono superati
+## 5. Un annuncio può tornare in vendita
+
+Un annuncio dato per venduto che ricompare torna `active`, `sold_at` viene
+azzerato e `removal_reason` cancellato.
+
+**Il conteggio delle vendite può quindi diminuire fra due giorni.** Non è un
+errore: è una correzione. Ogni ritorno lascia un evento in `scrape_events` con
+quanti giorni era rimasto invisibile — utile se un numero pubblicato la
+settimana prima non torna più.
+
+Se la BI conserva serie storiche, tenetene conto: un valore calcolato ieri può
+legittimamente non essere riproducibile oggi.
+
+---
+
+## 6. Cosa c'è nel database
+
+Cinque tabelle in `public`, di proprietà dello scraper. L'applicazione non ci
+scrive mai.
+
+| tabella | contenuto |
+|---|---|
+| `listings` | l'annuncio: auto, prezzo, venditore, stato |
+| `price_history` | ogni variazione di prezzo osservata |
+| `dealers` | i concessionari |
+| `brand_catalog` | tutte le marche esistenti su AutoScout |
+| `tracked_brands` | le 26 marche raccolte, con la loro configurazione |
+
+Non copiate `scrape_events` e `scrape_runs`: sono la telemetria dello scraper.
+Se serve sapere quanto è aggiornato un dato, si ricava da `last_seen_at`.
+
+**Solo auto usate.** Dal 31/07 lo scraper scarta alla fonte tutto ciò che ha
+`mileage_km` sotto i 1.000 o nullo — auto nuove e km 0 — con la stessa
+definizione del vostro `is_km_zero`, che quindi troverà sempre zero righe.
+Toglietelo o lasciatelo come rete, ma non progettateci sopra analisi. Il
+database contiene ora **81.615 km e 23.285 €** di media.
+
+Occupazione su Supabase: 252 MB dei 500 del piano gratuito, con circa 1 MB al
+giorno di crescita. Restano quattro o cinque mesi.
+
+---
+
+## 7. Ritmo della giornata
 
 ```
-                  spec BI (29/07)     ora (01/08)
-annunci               305.427           286.300
-attivi                293.926           263.916
-usciti                 11.501            22.384
-non arricchiti         13.954             6.435
-marche                     25                26   (aggiunta smart)
+22:00   lo scraper parte, 26 marche in fila
+04-06   il giro finisce
+09:00   riclassificazione delle vendite, poi copia su Supabase
+09:03   i dati del giorno sono pronti
 ```
 
-Gli usciti sono **raddoppiati**: sono passati tre giri completi. Qualunque quota
-calcolata sui valori del 29/07 va rifatta.
+Fra le 09:03 e le 09:00 del giorno dopo **i dati non cambiano**. Le viste
+materializzate possono essere aggiornate una volta al giorno senza logiche di
+invalidazione.
+
+La copia è un `TRUNCATE` più ricarica in un'unica transazione: chi legge vede
+quella di ieri finché la nuova non è completa, mai una tabella a metà. Se la
+riclassificazione fallisce, **non si pubblica nulla** — meglio i dati di ieri
+che quelli di oggi con dentro vendite inventate.
 
 ---
 
-## 6. Cose da sapere sui dati, non ripetute qui
+## 8. Il resto, dove sta
 
-Le insidie metodologiche — il tempo di vendita che non si calcola da
-`first_seen_at`, il troncamento a destra, `sold` che significa «sparito dal
-sito», il riuso degli id — sono documentate in
-`/home/vperrone/AutoSmart24/docs/AVVIO-SESSIONE-BI.md`, §4 e §5. Restano tutte
-valide.
+Le insidie metodologiche che restano tutte valide — il tempo di vendita che non
+si calcola da `first_seen_at`, il troncamento a destra, il riuso degli id — sono
+in `/home/vperrone/AutoSmart24/docs/AVVIO-SESSIONE-BI.md`, §4 e §5.
 
 Lo schema tabella per tabella è in
 `/home/vperrone/AutoSmart24/export-bi/README.md`.
-
----
-
-## 7. Una richiesta
-
-Lo schema `bi`, il ruolo di sola lettura e le migrazioni Alembic vivono ora su
-Supabase, dove **anche lo scraper scrive** ogni mattina con un `TRUNCATE` su
-`public`.
-
-Se create oggetti che dipendono da `public` — viste, viste materializzate,
-funzioni — scriveteli in modo che sopravvivano a quella ricarica, e ditecelo:
-sono l'unica cosa che potrebbe far fallire la sincronizzazione notturna, e il
-fallimento si vedrebbe solo il mattino dopo.
