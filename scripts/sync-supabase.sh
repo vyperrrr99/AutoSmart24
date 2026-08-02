@@ -51,6 +51,19 @@ fi
 echo "$RECLASS" | grep -vE 'Deprecation|warnings.warn' | tail -6 | sed 's/^/  /'
 
 
+# Only data travels, never schema. So a column added here and not there makes
+# the COPY fail inside the transaction -- safe, but with an error that says
+# nothing about the cause. Checked first, so the message names the problem.
+COLS_LOCAL=$(sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tAc \
+  "SELECT count(*) FROM information_schema.columns WHERE table_name='listings';" -d autosmart24 2>/dev/null | tr -d ' ')
+COLS_REMOTE=$(sudo -n docker run --rm --network host -e PGCONNECT_TIMEOUT=20 -e U="$URL" postgres:17 \
+  sh -c "psql \"\$U\" -tAc \"SELECT count(*) FROM information_schema.columns WHERE table_name='listings';\"" 2>/dev/null | tr -d ' \r')
+if [ "$COLS_LOCAL" != "$COLS_REMOTE" ]; then
+  echo "  SCHEMI DIVERSI: listings ha $COLS_LOCAL colonne qui e $COLS_REMOTE su Supabase."
+  echo "  Applica la migrazione anche là prima di pubblicare — non tocco nulla."
+  exit 1
+fi
+
 sudo -n docker exec -i autosmart24-postgres-1 pg_dump -U autosmart24 -d autosmart24 \
   --data-only --no-owner $TABLES > "$WORK/dati.sql" 2>/dev/null
 [ -s "$WORK/dati.sql" ] || { echo "estrazione vuota — interrompo senza toccare Supabase"; exit 1; }
