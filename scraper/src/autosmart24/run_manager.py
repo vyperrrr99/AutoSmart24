@@ -335,8 +335,25 @@ def run_brand_sweep(
                         if snippet["price"] is not None and snippet["price"] != row.price:
                             row.price = snippet["price"]
                             session.add(PriceHistory(listing_id=listing_id, price=snippet["price"], recorded_at=now))
+                        # A listing coming back from "sold" silently unmakes a
+                        # sale: the count drops and no trace explains why, so a
+                        # figure the BI published last week stops being
+                        # reproducible. Recorded, because a correction nobody
+                        # can see is indistinguishable from a bug -- and
+                        # because the quarantine rests on knowing how often
+                        # this happens.
+                        if row.status in ("sold", "quarantine"):
+                            gone_for = (now - row.sold_at).days if row.sold_at else None
+                            _log_event(
+                                session, run, "warning",
+                                f"Annuncio {listing_id} tornato in vendita dopo essere stato "
+                                f"{'in quarantena' if row.status == 'quarantine' else 'dato per venduto'}"
+                                + (f" ({gone_for} giorni)" if gone_for is not None else ""),
+                                url=snippet["url"],
+                            )
                         row.status = "active"
                         row.sold_at = None
+                        row.removal_reason = None
                         row.cross_reference_id = snippet["cross_reference_id"]
                         row.brand = snippet["brand"] or brand.display_name
                         row.model = snippet["model"]

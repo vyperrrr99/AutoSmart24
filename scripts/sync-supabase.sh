@@ -35,6 +35,22 @@ done
 
 echo "=== sincronizzazione avviata $(date '+%d/%m %H:%M:%S') ==="
 
+# Reclassify BEFORE publishing. A disappearance that is not a sale must never
+# reach the BI as one: once published, a fabricated sale is indistinguishable
+# from a real one downstream. If this fails, nothing is published -- yesterday's
+# copy is better than today's with invented sales in it.
+# The output is captured rather than piped: `cmd | tail` reports tail's exit
+# status, so a failing reclassification would look like a success and publish
+# invented sales.
+if ! RECLASS=$(sudo -n docker compose run --rm --no-deps \
+      -v "$PWD/scripts:/scripts" app python /scripts/riclassifica.py 2>&1); then
+  echo "  riclassificazione FALLITA — non pubblico"
+  echo "$RECLASS" | tail -5 | sed 's/^/    /'
+  exit 1
+fi
+echo "$RECLASS" | grep -vE 'Deprecation|warnings.warn' | tail -6 | sed 's/^/  /'
+
+
 sudo -n docker exec -i autosmart24-postgres-1 pg_dump -U autosmart24 -d autosmart24 \
   --data-only --no-owner $TABLES > "$WORK/dati.sql" 2>/dev/null
 [ -s "$WORK/dati.sql" ] || { echo "estrazione vuota — interrompo senza toccare Supabase"; exit 1; }

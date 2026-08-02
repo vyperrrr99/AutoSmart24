@@ -93,6 +93,10 @@ class Listing(Base):
     last_checked_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    # Why a listing left, when it left for a reason other than being sold.
+    # NULL on everything else, so "sold" keeps meaning sold without a caller
+    # having to remember a second condition.
+    removal_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sold_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     detail_scraped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
