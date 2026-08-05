@@ -1,6 +1,6 @@
 # Accesso al database per l'applicazione BI
 
-Da passare alla sessione che sviluppa AutoSmart-BI. Aggiornato al **03/08/2026**.
+Da passare alla sessione che sviluppa AutoSmart-BI. Aggiornato al **05/08/2026**.
 
 Sostituisce la versione del 01/08: cambiano gli stati degli annunci e c'è un
 problema di orario da correggere.
@@ -45,6 +45,37 @@ Se create oggetti nello schema `bi` che dipendono da `public`, ricordate che
 ogni mattina `public` viene svuotato e ricaricato: viste materializzate
 sopravvivono (vanno solo riaggiornate), vincoli di chiave esterna verso
 `public` **no**.
+
+### 1.3 Un annuncio su venti è una copia: filtrate `duplicate_of`
+
+Alcuni venditori pubblicano la stessa auto sotto più identità AutoScout.
+Autohero espone un solo catalogo attraverso **nove** id venditore: la stessa
+BMW X1 a 63.415 km e 18.999 € compare nove volte, una per id. Dei suoi 12.798
+annunci, **9.834 sono copie** — le auto vere sono 2.984.
+
+Sull'intero database sono **14.134 annunci attivi su 261.889 (5,4%)**.
+
+La colonna **`duplicate_of`** punta all'annuncio da contare. `NULL` significa
+«questo è quello da contare», quindi una query che ignora la colonna si
+comporta come prima che esistesse — ma conta le copie.
+
+```sql
+WHERE duplicate_of IS NULL      -- inventario, prezzi, distribuzioni
+```
+
+Senza quel filtro, un venditore con una politica di prezzo sua vota nove volte
+in ogni mediana. Nel preventivo di una Peugeot 208 fatto a mano, tre copie
+Stellantis spostavano la mediana da 13.000 a 12.500 €: **il 4% sul prezzo
+consigliato**.
+
+**Sulle vendite non serve fare nulla**: quando le copie spariscono insieme, una
+resta `sold` e le altre diventano `removed` con motivo `duplicate_listing`. La
+regola `status = 'sold'` continua a bastare.
+
+La deduplicazione avviene **solo** dentro reti registrate a mano in
+`config/reti-venditori.yaml`, mai per regola automatica: sette concessionari
+indipendenti si chiamano «City Car» in sette province, e fonderli avrebbe
+cancellato magazzino reale lasciando un numero plausibile al suo posto.
 
 ---
 
@@ -96,6 +127,7 @@ La colonna `removal_reason` dice perché un annuncio non è una vendita:
 | `republished` | l'annuncio è ricomparso sotto un id nuovo, con riferimento interno del concessionario **e** impronta dell'auto concordi |
 | `dealer_closure` | tutto lo stock del venditore è sparito in una notte — almeno 5 auto e oltre il 50%. In quarantena |
 | `quarantine_expired` | era in quarantena, è rimasto invisibile 30 giorni: **è una vendita**, ma provata dall'assenza e non osservata |
+| `duplicate_listing` | copia di un'auto pubblicata più volte dalla stessa rete di venditori: la vendita è contata sull'annuncio canonico |
 
 `quarantine_expired` è l'unico che compare su righe `sold`. Se vi serve
 distinguere le vendite osservate da quelle dedotte, è quel campo.
