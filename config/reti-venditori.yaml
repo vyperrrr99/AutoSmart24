@@ -169,6 +169,11 @@ reti:
   - nome: 'Deeealer'
     annunci_alla_creazione: 3
     id: [44752005, 45388581, 45388582]
+  - nome: 'Autoclub Spa'
+    annunci_alla_creazione: 533
+    # Confermata dall'utente il 05/08: stessa societa'. Proposta dal rilevatore
+    # con 94 auto in comune, l'85% del magazzino del piu' piccolo.
+    id: [12586, 51796686]
 
 # Coppie esaminate e scartate: nomi simili ma nessun magazzino in comune.
 scartate: []
