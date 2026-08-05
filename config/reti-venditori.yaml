@@ -27,7 +27,7 @@ reti:
     id: [14311448, 44454605]
   - nome: 'Jazzoni Appia - Gruppo IVA SpA'
     annunci_alla_creazione: 660
-    id: [44651803, 47914050, 51219019, 52512818]
+    id: [44651803, 47914050, 51219019, 52512818, 47076967]
   - nome: 'Fratelli Giacomel Spa'
     annunci_alla_creazione: 572
     id: [31889, 35996176, 39419179, 40087772, 51789616, 51789912]
@@ -75,13 +75,13 @@ reti:
     id: [11105011, 2658090]
   - nome: 'Spoticar Stellantis &You Sesto San Giovanni'
     annunci_alla_creazione: 233
-    id: [13456158, 47243956]
+    id: [13456158, 47243956, 12047]
   - nome: 'Sva'
     annunci_alla_creazione: 229
     id: [31974, 46998099]
   - nome: 'Gruppo M Srl di Gruppo Morini – T Motor Bologna'
     annunci_alla_creazione: 206
-    id: [21785564, 45601339, 46157348, 46158808, 47504442]
+    id: [21785564, 45601339, 46157348, 46158808, 47504442, 46157719, 47651969]
   - nome: 'Lombarda Motori Spa'
     annunci_alla_creazione: 197
     id: [34308, 46038747]
@@ -120,13 +120,13 @@ reti:
     id: [12061, 43495691, 50513896]
   - nome: 'PuntoCar  Automobili'
     annunci_alla_creazione: 79
-    id: [19676521, 52026355]
+    id: [19676521, 52026355, 46936034]
   - nome: 'Drivecar'
     annunci_alla_creazione: 74
     id: [13508, 48019031]
   - nome: 'Nuova AutoAlpina Torino'
     annunci_alla_creazione: 69
-    id: [44825197, 50693960]
+    id: [44825197, 50693960, 51922730]
   - nome: 'Az Car srls'
     annunci_alla_creazione: 62
     id: [42614821, 51681582, 61991674]
@@ -141,7 +141,7 @@ reti:
     id: [39925967, 48206376]
   - nome: 'Ferri Auto Spa'
     annunci_alla_creazione: 54
-    id: [14217720, 45490292]
+    id: [14217720, 45490292, 4109]
   - nome: 'Lario Mi Auto Srl'
     annunci_alla_creazione: 52
     id: [23575890, 44651558]
@@ -176,4 +176,38 @@ reti:
     id: [12586, 51796686]
 
 # Coppie esaminate e scartate: nomi simili ma nessun magazzino in comune.
+  - nome: 'Autoteam - Intergea Nord Est'
+    aggiunta_il: '2026-08-05'
+    id: [4147, 14222701, 21505050]
+  - nome: 'Ferrari Motors - Intergea'
+    aggiunta_il: '2026-08-05'
+    id: [4107465, 27386343, 45331396]
+  - nome: 'De Bona Motors'
+    aggiunta_il: '2026-08-05'
+    id: [4130, 5535432, 10529120, 12998276, 28041517]
+  - nome: 'Ceccato Automobili'
+    aggiunta_il: '2026-08-05'
+    id: [3204131, 38255408, 52049086]
+  - nome: 'Gruppo Carmeli SpA'
+    aggiunta_il: '2026-08-05'
+    id: [4112, 20511358]
+  - nome: 'Ke Car by Center Car srl'
+    aggiunta_il: '2026-08-05'
+    id: [20236349, 41869501]
+  - nome: 'Automax srl'
+    aggiunta_il: '2026-08-05'
+    id: [45678820, 50611189]
+  - nome: 'Sagam Spa'
+    aggiunta_il: '2026-08-05'
+    id: [28703, 16442625]
+  - nome: 'Gruppo Piccirillo Spa'
+    aggiunta_il: '2026-08-05'
+    id: [42675944, 61925744]
+  - nome: 'Eurocar Italia - Parma'
+    aggiunta_il: '2026-08-05'
+    id: [2782562, 46997320]
+  - nome: 'QueenCar - Effe Srl'
+    aggiunta_il: '2026-08-05'
+    id: [2680886, 46291084]
+
 scartate: []
