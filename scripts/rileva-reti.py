@@ -31,6 +31,8 @@ examined once should not be re-asked every month.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import json
 import os
 import sys
 from collections import defaultdict
@@ -84,9 +86,83 @@ WHERE c.condivise >= :min_auto
 """)
 
 
+def _chiave(d1: int, d2: int) -> str:
+    return f"{min(d1, d2)}-{max(d1, d2)}"
+
+
+def leggi_storico(path: str) -> list[dict]:
+    """Ogni riga e' un giro. Un file assente o una riga illeggibile non
+    fermano il rilevatore: lo storico serve a corroborare, non a decidere."""
+    try:
+        righe = open(path).read().splitlines()
+    except FileNotFoundError:
+        return []
+    giri = []
+    for r in righe:
+        try:
+            giri.append(json.loads(r))
+        except ValueError:
+            continue
+    return giri
+
+
+def andamento(giri: list[dict], coppie_ora: list, out=print) -> None:
+    """Mostra come si muovono le coppie lasciate in sospeso.
+
+    Una coppia che condivide sempre le stesse dodici auto puo' essere una
+    coincidenza stabile; una che sale di mese in mese sta condividendo un
+    catalogo. Il numero di un solo giro non distingue i due casi, e le coppie
+    su cui la decisione e' rinviata sono proprio quelle in cui la differenza
+    conta.
+    """
+    if not giri:
+        out("  (primo giro registrato: nessun confronto possibile)")
+        return
+    prec = giri[-1]
+    quando = prec.get("data", "?")
+    viste = {}
+    for d1, n1, c1, d2, n2, c2, cond, q, km in coppie_ora:
+        k = _chiave(d1, d2)
+        viste[k] = True
+        v = prec.get("coppie", {}).get(k)
+        # Gli id, non solo i nomi: tre venditori distinti si chiamano
+        # esattamente "Gino Spa", e senza id due coppie diverse stampano una
+        # riga identica -- di nuovo il caso "City Car", stavolta nell'output.
+        chi = f"{d1} {n1[:20]} + {d2} {n2[:20]}"
+        if v is None:
+            out(f"  NUOVA     {cond:4} ({q})  {chi}")
+            continue
+        d_cond, d_q = cond - v[0], round(float(q) - v[1], 2)
+        segno = "+" if d_cond > 0 else ""
+        stato = "sale" if d_cond > 0 else ("scende" if d_cond < 0 else "ferma")
+        out(f"  {stato:9} {cond:4} ({q})  {segno}{d_cond} auto, {segno}{d_q:.2f} "
+            f"dal {quando}  {chi}")
+    for k, v in (prec.get("coppie") or {}).items():
+        if k not in viste:
+            out(f"  uscita    sotto soglia dal {quando} (era {v[0]} auto)  id {k}")
+
+
+def scrivi_storico(path: str, coppie: list, oggi: str) -> None:
+    """Solo append. Il file e' di proprieta' dell'utente e il container gira
+    come root: aggiungere righe non ne cambia il padrone, ricrearlo si'."""
+    riga = {"data": oggi,
+            "coppie": {_chiave(r[0], r[3]): [r[6], float(r[7])] for r in coppie}}
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(riga, sort_keys=True) + "\n")
+    except OSError as e:
+        # Detto forte: uno storico che non si accumula non da' segno di se',
+        # e il confronto fra i giri e' l'unica ragione per cui esiste.
+        print(f"\nATTENZIONE: giro NON registrato in {path} ({e}).")
+        print("Manca il mount? -v $PWD/stato:/app/stato")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--registro", default="/app/config/reti-venditori.yaml")
+    ap.add_argument("--storico", default="/app/stato/reti-storico.jsonl")
+    ap.add_argument("--non-registrare", action="store_true",
+                    help="non aggiungere questo giro allo storico")
     args = ap.parse_args()
 
     nets = SellerNetworks.load(args.registro)
@@ -146,6 +222,10 @@ def main() -> int:
                   f"{d1} {n1[:26]:28} + {d2} {n2[:26]}")
         print()
 
+        print("=== come si muovono rispetto al giro precedente ===")
+        andamento(leggi_storico(args.storico), nuove_reti)
+        print()
+
     stale = [g for g in range(len(nets.networks)) if g not in visti_in_rete]
     if stale:
         print("=== reti registrate che non condividono piu' nulla (da verificare) ===")
@@ -155,6 +235,9 @@ def main() -> int:
 
     if not (nuovi_membri or nuove_reti or stale):
         print("nessuna proposta: il registro riflette i dati")
+
+    if not args.non_registrare:
+        scrivi_storico(args.storico, nuove_reti, dt.date.today().strftime("%d/%m/%Y"))
 
     print("Questo strumento non modifica nulla. Le decisioni si scrivono a mano in")
     print(f"{args.registro}, sotto 'reti' se confermate o 'scartate' se no.")
