@@ -97,6 +97,9 @@ class Listing(Base):
     # NULL on everything else, so "sold" keeps meaning sold without a caller
     # having to remember a second condition.
     removal_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # When several seller identities publish the same car, the copies point at
+    # one canonical listing. NULL means "this is the one to count".
+    duplicate_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
     sold_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     detail_scraped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

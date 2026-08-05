@@ -43,7 +43,8 @@ echo "=== sincronizzazione avviata $(date '+%d/%m %H:%M:%S') ==="
 # status, so a failing reclassification would look like a success and publish
 # invented sales.
 if ! RECLASS=$(sudo -n docker compose run --rm --no-deps \
-      -v "$PWD/scripts:/scripts" app python /scripts/riclassifica.py 2>&1); then
+      -v "$PWD/scripts:/scripts" -v "$PWD/config:/app/config" \
+      app python /scripts/riclassifica.py 2>&1); then
   echo "  riclassificazione FALLITA — non pubblico"
   echo "$RECLASS" | tail -5 | sed 's/^/    /'
   exit 1

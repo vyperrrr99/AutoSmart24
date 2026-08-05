@@ -1,0 +1,174 @@
+# Reti di venditori: identità diverse su AutoScout che espongono lo stesso parco auto.
+#
+# Perché un registro curato e non una regola. Il segnale (quota di magazzino
+# condivisa) separa benissimo i casi veri dalle coincidenze, ma una fusione
+# sbagliata non produce un errore visibile: cancella magazzino reale dalle
+# statistiche e il numero che resta sembra plausibile. Sette concessionari
+# chiamati "City Car" in sette province sono aziende estranee, e una regola sul
+# nome li avrebbe fusi.
+#
+# Generato il 04/08/2026 dai dati veri, con soglia 60% di magazzino condiviso.
+# Da qui in poi si modifica a mano: il rilevatore mensile propone, questo file
+# decide.
+#
+# rilevate: dopo la revisione umana, gli id sono la stessa entità
+# scartate:  coppie guardate e giudicate NON collegate -- registrate perché la
+#            domanda non vada riaperta ogni mese
+
+reti:
+  - nome: 'Autohero Italia Srl'
+    annunci_alla_creazione: 12773
+    id: [46122441, 46145213, 46145216, 46145217, 46145218, 47432368, 47439823, 51151793, 51152037]
+  - nome: 'brumbrum - Reggio Emilia'
+    annunci_alla_creazione: 1102
+    id: [21784695, 22240875, 23463950, 25631076]
+  - nome: 'Secondlife di  Pasquarelli Auto Spa'
+    annunci_alla_creazione: 737
+    id: [14311448, 44454605]
+  - nome: 'Jazzoni Appia - Gruppo IVA SpA'
+    annunci_alla_creazione: 660
+    id: [44651803, 47914050, 51219019, 52512818]
+  - nome: 'Fratelli Giacomel Spa'
+    annunci_alla_creazione: 572
+    id: [31889, 35996176, 39419179, 40087772, 51789616, 51789912]
+  - nome: 'International  G.C. Motors Srl'
+    annunci_alla_creazione: 566
+    id: [35994684, 49071561, 7114]
+  - nome: 'Ambrosi Spa'
+    annunci_alla_creazione: 527
+    id: [4175, 52288018]
+  - nome: 'Tomasi Auto Srl - Parma'
+    annunci_alla_creazione: 506
+    id: [31156646, 4149, 44833983, 47271028, 52549251]
+  - nome: 'Carraro Spa'
+    annunci_alla_creazione: 501
+    id: [17587170, 47508076, 52683418]
+  - nome: 'Sfr motors srl'
+    annunci_alla_creazione: 475
+    id: [20035946, 38120101]
+  - nome: 'Grand Prix Group'
+    annunci_alla_creazione: 451
+    id: [12740, 35491897]
+  - nome: 'Automobili Vendramini Srl - Rivignano Teor UD'
+    annunci_alla_creazione: 419
+    id: [45588324, 7548902]
+  - nome: 'Sorbara Auto Srl'
+    annunci_alla_creazione: 336
+    id: [1851957, 20407407]
+  - nome: 'Rattix Srl - Ratti Auto'
+    annunci_alla_creazione: 331
+    id: [13767608, 37626762]
+  - nome: 'AutoOne Milano'
+    annunci_alla_creazione: 322
+    id: [26186942, 36331495]
+  - nome: 'Delta Motors  spa'
+    annunci_alla_creazione: 316
+    id: [44986201, 48191122]
+  - nome: 'Stellantis &You Roma'
+    annunci_alla_creazione: 286
+    id: [32102, 3237292]
+  - nome: 'Autocentri Giustozzi Srl'
+    annunci_alla_creazione: 267
+    id: [20225032, 4207]
+  - nome: 'Ns3 Srl'
+    annunci_alla_creazione: 234
+    id: [11105011, 2658090]
+  - nome: 'Spoticar Stellantis &You Sesto San Giovanni'
+    annunci_alla_creazione: 233
+    id: [13456158, 47243956]
+  - nome: 'Sva'
+    annunci_alla_creazione: 229
+    id: [31974, 46998099]
+  - nome: 'Gruppo M Srl di Gruppo Morini – T Motor Bologna'
+    annunci_alla_creazione: 206
+    id: [21785564, 45601339, 46157348, 46158808, 47504442]
+  - nome: 'Lombarda Motori Spa'
+    annunci_alla_creazione: 197
+    id: [34308, 46038747]
+  - nome: 'Auto Scala Srl'
+    annunci_alla_creazione: 178
+    id: [4685407, 47648464]
+  - nome: 'Theorema Spa'
+    annunci_alla_creazione: 143
+    id: [12380, 46318255, 52548911]
+  - nome: 'A.D. Motor spa'
+    annunci_alla_creazione: 140
+    id: [12124, 45944550]
+  - nome: 'CLD Auto Srl'
+    annunci_alla_creazione: 139
+    id: [11751697, 44187601]
+  - nome: 'Rolandi auto Spa'
+    annunci_alla_creazione: 134
+    id: [12822, 4108]
+  - nome: 'Enrico Giovanzana Srl'
+    annunci_alla_creazione: 128
+    id: [42427123, 6625823]
+  - nome: 'Bryan Auto Srl'
+    annunci_alla_creazione: 128
+    id: [25063091, 50640508]
+  - nome: 'Elitcar Srl'
+    annunci_alla_creazione: 101
+    id: [28968, 32396931]
+  - nome: 'Bongini Motors by Mbl Motors'
+    annunci_alla_creazione: 86
+    id: [12363, 15833000]
+  - nome: 'Centro Assistenza Porsche Livorno'
+    annunci_alla_creazione: 84
+    id: [12829, 46825785]
+  - nome: 'Autolocatelli Srl'
+    annunci_alla_creazione: 79
+    id: [12061, 43495691, 50513896]
+  - nome: 'PuntoCar  Automobili'
+    annunci_alla_creazione: 79
+    id: [19676521, 52026355]
+  - nome: 'Drivecar'
+    annunci_alla_creazione: 74
+    id: [13508, 48019031]
+  - nome: 'Nuova AutoAlpina Torino'
+    annunci_alla_creazione: 69
+    id: [44825197, 50693960]
+  - nome: 'Az Car srls'
+    annunci_alla_creazione: 62
+    id: [42614821, 51681582, 61991674]
+  - nome: 'Fast Car srl'
+    annunci_alla_creazione: 61
+    id: [15774604, 44767202]
+  - nome: 'Marwincar srl'
+    annunci_alla_creazione: 57
+    id: [23861201, 45314076]
+  - nome: 'Panero Auto Srl - Beinasco'
+    annunci_alla_creazione: 55
+    id: [39925967, 48206376]
+  - nome: 'Ferri Auto Spa'
+    annunci_alla_creazione: 54
+    id: [14217720, 45490292]
+  - nome: 'Lario Mi Auto Srl'
+    annunci_alla_creazione: 52
+    id: [23575890, 44651558]
+  - nome: 'Autosalone Internazionale Srl'
+    annunci_alla_creazione: 40
+    id: [4134, 48880603, 48880659]
+  - nome: 'Rossomandi Auto Srl'
+    annunci_alla_creazione: 29
+    id: [3865868, 60508279, 62730760]
+  - nome: 'Gr Auto'
+    annunci_alla_creazione: 27
+    id: [44824848, 51890755]
+  - nome: 'Autoelier srl'
+    annunci_alla_creazione: 20
+    id: [39417712, 48301201]
+  - nome: 'Autofelappi srl'
+    annunci_alla_creazione: 13
+    id: [23356656, 38199831]
+  - nome: 'Bebocar 2.0 srl'
+    annunci_alla_creazione: 13
+    id: [38110717, 47469971]
+  - nome: 'Conte Concessionaria Auto -  F.C. Impianti'
+    annunci_alla_creazione: 8
+    id: [50804449, 60260379]
+  - nome: 'Deeealer'
+    annunci_alla_creazione: 3
+    id: [44752005, 45388581, 45388582]
+
+# Coppie esaminate e scartate: nomi simili ma nessun magazzino in comune.
+scartate: []

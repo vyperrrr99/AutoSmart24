@@ -21,6 +21,9 @@ from sqlalchemy.orm import Session
 sys.path.insert(0, "/app/src")
 
 from autosmart24.db.models import ScrapeEvent, ScrapeRun  # noqa: E402
+from autosmart24.networks import (  # noqa: E402
+    SellerNetworks, collapse_duplicate_sales, deduplicate_networks,
+)
 from autosmart24.removal import reclassify_removals, resolve_quarantine  # noqa: E402
 
 
@@ -49,6 +52,13 @@ def main() -> int:
         # what is confirmed here has been absent for the full window, not for
         # the few minutes since reclassification put it there.
         confirmed = resolve_quarantine(session, now=dt.datetime.utcnow())
+
+        # Deduplicate before judging sales. A network's nine copies of one car
+        # disappear together, and each would otherwise be counted as its own
+        # sale in the figure the BI is built on.
+        nets = SellerNetworks.load()
+        marked = deduplicate_networks(session, nets)
+        collapsed = collapse_duplicate_sales(session, since=since)
         changed = reclassify_removals(session, since=since)
 
         total = sum(changed.values())
@@ -56,6 +66,7 @@ def main() -> int:
             print(f"  {reason:16} {n:>6}", flush=True)
         print(f"  {'TOTALE':16} {total:>6}", flush=True)
         print(f"  quarantene scadute confermate come vendite: {confirmed}", flush=True)
+        print(f"  reti: {len(nets.networks)} · copie marcate {marked} · vendite duplicate tolte {collapsed}", flush=True)
 
         if args.dry_run:
             session.rollback()
