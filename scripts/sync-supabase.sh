@@ -23,33 +23,19 @@ trap 'rm -rf "$WORK"' EXIT
 [ -f "$ENVFILE" ] || { echo "manca $ENVFILE"; exit 1; }
 URL=$(sed 's/^SUPABASE_URL=//' "$ENVFILE")
 
-# Wait for the sweep to finish. Bounded: an unbounded wait would leave this
-# polling for ever if a run ends up stuck, and a sync that never runs is
-# harder to notice than one that reports giving up.
-for i in $(seq 1 90); do   # x 120s = 3 hours
-  CUR=$(curl -s -m 10 "$API/queue" 2>/dev/null | grep -o '"current":null' || true)
-  [ -n "$CUR" ] && break
-  [ "$i" = "90" ] && { echo "$(date '+%H:%M:%S') scansione ancora in corso dopo 3h — sincronizzazione saltata"; exit 1; }
-  sleep 120
-done
-
-echo "=== sincronizzazione avviata $(date '+%d/%m %H:%M:%S') ==="
-
+# Waiting for the sweep and reclassifying now live in one place, called from
+# here and from cron independently. Reclassification is not a publication step
+# -- it is maintenance of the source database, and it must keep running when
+# publication does not, which is exactly what happened on 06/08/2026.
+#
 # Reclassify BEFORE publishing. A disappearance that is not a sale must never
 # reach the BI as one: once published, a fabricated sale is indistinguishable
 # from a real one downstream. If this fails, nothing is published -- yesterday's
 # copy is better than today's with invented sales in it.
-# The output is captured rather than piped: `cmd | tail` reports tail's exit
-# status, so a failing reclassification would look like a success and publish
-# invented sales.
-if ! RECLASS=$(sudo -n docker compose run --rm --no-deps \
-      -v "$PWD/scripts:/scripts" -v "$PWD/config:/app/config" \
-      app python /scripts/riclassifica.py 2>&1); then
+if ! bash "$PWD/scripts/riclassifica-notturna.sh"; then
   echo "  riclassificazione FALLITA — non pubblico"
-  echo "$RECLASS" | tail -5 | sed 's/^/    /'
   exit 1
 fi
-echo "$RECLASS" | grep -vE 'Deprecation|warnings.warn' | tail -6 | sed 's/^/  /'
 
 
 # Only data travels, never schema. So a column added here and not there makes
