@@ -2,6 +2,7 @@ import datetime as dt
 
 from sqlalchemy.orm import sessionmaker
 
+from autosmart24.equipment import COLUMNS as EQUIPMENT_COLUMNS
 from autosmart24.config import BrandConfig
 from autosmart24.db.models import Listing, ScrapeRun
 from autosmart24.run_manager import run_brand_sweep
@@ -28,6 +29,8 @@ def _fake_detail_data(listing_id: str) -> dict:
         "emission_class": None, "upholstery": None, "upholstery_color": None,
         "is_conditional_price": None, "interaction_count": None, "favorites_count": None,
         "new_driver_suitable": None, "dealer": None,
+        "paint_type": None, "body_color_original": None, "equipment": None,
+        **{c: None for c in EQUIPMENT_COLUMNS},
     }
 
 

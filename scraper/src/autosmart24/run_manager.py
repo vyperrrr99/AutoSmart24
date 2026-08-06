@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from autosmart24.config import MIN_USED_CAR_KM, BrandConfig
 from autosmart24.db.dealers import upsert_dealer
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
+from autosmart24.equipment import COLUMNS as EQUIPMENT_COLUMNS
 from autosmart24.scraping.change_detection import diff_sweep
 from autosmart24.scraping.concurrency import run_worker_pool
 from autosmart24.scraping.coverage import assess_coverage
@@ -166,6 +167,11 @@ def process_detail_backlog(
                 row.emission_class = detail["emission_class"]
                 row.upholstery = detail["upholstery"]
                 row.upholstery_color = detail["upholstery_color"]
+                row.paint_type = detail["paint_type"]
+                row.body_color_original = detail["body_color_original"]
+                row.equipment = detail["equipment"]
+                for _opt in EQUIPMENT_COLUMNS:
+                    setattr(row, _opt, detail[_opt])
                 row.is_conditional_price = detail["is_conditional_price"]
                 row.interaction_count = detail["interaction_count"]
                 row.favorites_count = detail["favorites_count"]

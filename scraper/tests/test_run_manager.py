@@ -7,6 +7,7 @@ import respx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from autosmart24.equipment import COLUMNS as EQUIPMENT_COLUMNS
 from autosmart24.config import BrandConfig
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
@@ -99,6 +100,8 @@ def _fake_detail_data(listing_id: str) -> dict:
         "emission_class": None, "upholstery": None, "upholstery_color": None,
         "is_conditional_price": None, "interaction_count": None, "favorites_count": None,
         "new_driver_suitable": None, "dealer": None,
+        "paint_type": None, "body_color_original": None, "equipment": None,
+        **{c: None for c in EQUIPMENT_COLUMNS},
     }
 
 
@@ -299,6 +302,8 @@ def test_run_brand_sweep_enriches_pending_detail_backlog(db_session):
                 "emission_class": "Euro 6d", "upholstery": "Altro", "upholstery_color": None,
                 "is_conditional_price": True, "interaction_count": 500, "favorites_count": 20,
                 "new_driver_suitable": True, "dealer": None,
+                "paint_type": None, "body_color_original": None, "equipment": None,
+                **{c: None for c in EQUIPMENT_COLUMNS},
             },
         )
 
@@ -1178,6 +1183,8 @@ def test_process_detail_backlog_persists_new_structured_fields(db_session):
             "emission_class": "Euro 6d", "upholstery": "Altro", "upholstery_color": "Nero",
             "is_conditional_price": True, "interaction_count": 10670, "favorites_count": 193,
             "new_driver_suitable": True, "dealer": None,
+            "paint_type": None, "body_color_original": None, "equipment": None,
+            **{c: None for c in EQUIPMENT_COLUMNS},
         })
         return DetailResult(sold=False, data=data)
 

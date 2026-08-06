@@ -65,6 +65,25 @@ class Listing(Base):
     emission_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     upholstery: Mapped[str | None] = mapped_column(String(64), nullable=True)
     upholstery_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Paint: body_color holds the generic English name, these two the finish
+    # and the manufacturer's own name for it.
+    paint_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    body_color_original: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # The full option list as published, plus the nine an expert picked as
+    # moving price. NULL everywhere means the detail page was never read --
+    # unknown, not unequipped. See autosmart24.equipment.
+    equipment: Mapped[list | None] = mapped_column(JSONVariant, nullable=True)
+    has_sunroof: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_panoramic_roof: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_leather_interior: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_heated_seats: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_electric_seats: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_parking_camera: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_full_led_headlights: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_led_headlights: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_alloy_wheels: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_conditional_price: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     interaction_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     favorites_count: Mapped[int | None] = mapped_column(Integer, nullable=True)

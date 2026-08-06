@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from autosmart24.equipment import derive, extract
+
 
 def _parse_city(city: str | None) -> tuple[str | None, str | None]:
     if not city:
@@ -49,6 +51,7 @@ def map_detail_listing(ld: dict) -> dict:
 
     city, province = _parse_city(location.get("city"))
     first_registration_raw = vehicle.get("firstRegistrationDateRaw")
+    equipment = extract(vehicle)
 
     return {
         "id": ld["id"],
@@ -84,6 +87,10 @@ def map_detail_listing(ld: dict) -> dict:
         "emission_class": (vehicle.get("environmentEuDirective") or {}).get("formatted"),
         "upholstery": vehicle.get("upholstery"),
         "upholstery_color": vehicle.get("upholsteryColor"),
+        "paint_type": vehicle.get("paintType"),
+        "body_color_original": vehicle.get("bodyColorOriginal"),
+        "equipment": equipment,
+        **derive(equipment),
         "new_driver_suitable": vehicle.get("newDriverSuitable"),
         "seller_type": seller.get("type"),
         "seller_company_name": seller.get("companyName"),

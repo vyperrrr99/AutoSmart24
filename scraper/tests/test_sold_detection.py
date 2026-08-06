@@ -1,6 +1,7 @@
 import datetime as dt
 
 from autosmart24.config import BrandConfig
+from autosmart24.equipment import COLUMNS as EQUIPMENT_COLUMNS
 from autosmart24.db.models import Listing, ScrapeEvent, ScrapeRun
 from autosmart24.run_manager import process_detail_backlog, run_brand_sweep
 from autosmart24.scraping.detail_queue import DetailResult
@@ -297,6 +298,10 @@ def _full_detail_data(**overrides) -> dict:
         "emission_class": None, "upholstery": None, "upholstery_color": None,
         "is_conditional_price": None, "interaction_count": None, "favorites_count": None,
         "new_driver_suitable": None, "dealer": None,
+        "paint_type": None, "body_color_original": None, "equipment": None,
+        # Presi dal modulo, non riscritti a mano: aggiungere una decima
+        # dotazione non deve rompere ogni test che sfiora l'arricchimento.
+        **{c: None for c in EQUIPMENT_COLUMNS},
     }
     data.update(overrides)
     return data

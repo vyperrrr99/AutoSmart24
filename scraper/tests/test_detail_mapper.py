@@ -166,3 +166,53 @@ def test_parse_weight_kg_handles_thousands_separator_and_none():
     assert _parse_weight_kg("800 kg") == 800
     assert _parse_weight_kg(None) is None
     assert _parse_weight_kg("") is None
+
+
+def test_map_detail_listing_extracts_paint_and_equipment():
+    """The four colour fields AutoScout publishes are not interchangeable.
+
+    `bodyColorRaw` is the generic English name we already stored; the finish
+    and the manufacturer's own name for it are separate fields, and on a
+    special paint they are what the colour is actually worth.
+    """
+    ld = _listing_details()
+    ld["vehicle"].update({
+        "bodyColorRaw": "Green",
+        "bodyColor": "Verde",
+        "bodyColorOriginal": "Verde Salvia Metallizzato",
+        "paintType": "Metallizzato",
+        "equipment": {
+            "comfortAndConvenience": [
+                {"id": "Tettuccio apribile"}, {"id": "Volante in pelle"},
+            ],
+            "extras": [{"id": 'Cerchi in lega (19")'}],
+            "safetyAndSecurity": [{"id": "Fari full-LED"}],
+        },
+    })
+
+    mapped = map_detail_listing(ld)
+
+    assert mapped["body_color"] == "Green", "il campo esistente non cambia significato"
+    assert mapped["paint_type"] == "Metallizzato"
+    assert mapped["body_color_original"] == "Verde Salvia Metallizzato"
+    assert mapped["equipment"] == [
+        'Cerchi in lega (19")', "Fari full-LED", "Tettuccio apribile", "Volante in pelle",
+    ]
+    assert mapped["has_sunroof"] is True
+    assert mapped["has_full_led_headlights"] is True
+    assert mapped["has_alloy_wheels"] is True, "solo la misura, senza l'etichetta semplice"
+    assert mapped["has_leather_interior"] is False, "il volante in pelle non sono gli interni"
+    assert mapped["has_led_headlights"] is False, "full-LED non implica LED"
+
+
+def test_map_detail_listing_leaves_equipment_unknown_when_absent():
+    """Una pagina senza blocco equipaggiamenti non dice "nessun optional":
+    non dice nulla. False qui sarebbe un fatto mai osservato."""
+    ld = _listing_details()
+    ld["vehicle"].pop("equipment", None)
+
+    mapped = map_detail_listing(ld)
+
+    assert mapped["equipment"] is None
+    assert mapped["has_sunroof"] is None
+    assert mapped["has_alloy_wheels"] is None
