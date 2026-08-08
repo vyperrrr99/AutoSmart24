@@ -26,6 +26,12 @@ Su `listings`, tutte popolate dalla pagina di dettaglio.
 | `body_color_original` | text | nome del costruttore: `Verde Salvia Metallizzato` |
 | `equipment` | jsonb | **la lista completa**, grezza, con indice GIN |
 
+Le due colonne della vernice **non sono piene quanto le altre**, e non per un
+difetto: le compila il venditore. Sul campione `paint_type` c'era sul **79%**
+degli annunci e `body_color_original` solo sul **32%**. Il nome commerciale è
+il più prezioso dei due e il più raro — trattatelo come un di più, non come
+una dimensione su cui segmentare.
+
 **Cambio e trazione le avevate già** e non cambiano: `transmission`
 (`Automatico` 145.217, `Manuale` 128.282, `Semiautomatico` 31.149) e
 `drive_train` (`Anteriore` 182.270, `4x4` 55.872, `Posteriore` 14.054).
