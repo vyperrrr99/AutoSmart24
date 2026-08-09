@@ -69,12 +69,19 @@ SCADENZA_MINUTI = 50  # un blocco non supera l'ora che gli e' stata data
 # al minuto -- la pausa di 3-8s domina, la richiesta vera pesa poco piu' di un
 # secondo. A concorrenza 4: 38 al minuto, 2.280 all'ora.
 #
-# Da cui il blocco. In 50 minuti di scadenza ci starebbero ~1.900 auto; ne
-# mettiamo 1.500 perche' sotto concorrenza il sito risponde piu' lento della
-# prova a un worker solo, e un blocco che sfora non e' un guaio ma nemmeno
-# utile: le auto avanzate le prende il blocco dopo.
+# Da cui il blocco, ridimensionato il 10/08 su undici blocchi veri invece che
+# sulla prova a un worker solo. Misurato: 1.500 auto in 36-37 minuti, cioe'
+# 40,4-41,6 al minuto -- tre per cento di scarto, perche' la pausa di cortesia
+# domina e non varia.
+#
+# 1.850 auto stanno in 45,8 minuti alla velocita' piu' lenta osservata e in
+# 44,7 a quella media, contro una scadenza di 50: restano circa quattro minuti
+# di margine. Andare oltre non sarebbe pericoloso -- un blocco che sfora si
+# chiude e basta, il cursore non avanza e il blocco dopo riprende esattamente
+# da li' senza riscaricare nulla -- ma il margine costa poco e toglie un modo
+# di sbagliare.
 CONCORRENZA = 4
-BLOCCO = 1500
+BLOCCO = 1850
 LOTTO_DB = 500
 
 
