@@ -34,19 +34,31 @@ vendite, per quelle righe le dotazioni non arriveranno né ora né dopo.
 
 ## 2. Quanto è rappresentativo quello che avete adesso
 
-Il campione coperto è già vicino al parco totale, con una leggera inclinazione
-verso le auto recenti:
+**Correzione rispetto alla prima stesura di questo documento.** Avevamo
+scritto che il recupero procede per id crescente e che quindi la parte già
+fatta non era un campione casuale. È sbagliato, e in vostro sfavore: gli id
+sono **UUID**, non progressivi. La correlazione fra ordine di id e data di
+primo avvistamento è **0,001**, cioè nessuna. Il recupero attraversa il parco
+in ordine casuale.
 
-| | coperte (4.018) | tutte (247.514) |
+I numeri lo confermano:
+
+| | coperte (47.881) | tutte (247.234) |
 |---|---|---|
-| anno medio | 2021,2 | 2020,6 |
-| prezzo medio | 23.253 € | 23.489 € |
-| km medi | 79.530 | 82.699 |
+| anno medio | 2021,01 | 2020,63 |
+| prezzo medio | 23.977 € | 23.514 € |
+| km medi | 81.295 | 82.735 |
 
-Sei mesi di differenza sull'anno, prezzo praticamente identico. Utilizzabile
-per capire l'ordine di grandezza; **non ancora per pubblicare stime**, perché
-il recupero procede per id crescente e la parte già fatta non è un campione
-casuale del parco.
+Prezzo entro il 2%, chilometraggio entro il 2%, quattro mesi sull'anno. Lo
+scarto residuo si spiega da sé: oltre al recupero casuale, ogni notte entrano
+annunci nuovi che ricevono le dotazioni subito, e quelli sono per forza
+recenti.
+
+**Conseguenza pratica: potete già usarli per le analisi aggregate.** Un quinto
+del parco preso a caso è ampiamente sufficiente per medie, distribuzioni e
+confronti fra segmenti. Quello che ancora non potete fare è rispondere su una
+singola auto: se l'annuncio che interessa all'utente non è ancora stato
+letto, le sue dotazioni sono `NULL` e nessuna aggregazione lo aggiusta.
 
 ## 3. Ogni quanto compare ciascuna dotazione
 
