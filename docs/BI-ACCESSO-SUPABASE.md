@@ -1,5 +1,13 @@
 # Accesso al database per l'applicazione BI
 
+> **ATTENZIONE — il titolo inganna: Supabase è stato abbandonato il 06/08/2026**
+> e le sue tabelle sono state svuotate. Tutto ciò che riguarda la connessione,
+> la sincronizzazione delle 09:00 e le migrazioni da applicare là **non vale
+> più**. Il database di riferimento è quello locale.
+> Restano attuali e utili: **§1.3** (`duplicate_of IS NULL`), **§3** (i quattro
+> stati e `removal_reason`), **§4** (perché esiste la riclassificazione).
+> Leggere prima `BI-INDICE-DOCUMENTAZIONE.md`.
+
 Da passare alla sessione che sviluppa AutoSmart-BI. Aggiornato al **05/08/2026**.
 
 Sostituisce la versione del 01/08: cambiano gli stati degli annunci e c'è un

@@ -1,5 +1,11 @@
 # Avvio della sessione per l'app di BI
 
+> **ATTENZIONE — documento del 31/07/2026, in parte superato.**
+> Le insidie §4.1 e §4.2 sul tempo di vendita restano valide e importanti.
+> Non è più vero: §4.3 (le auto nuove e km 0 sono scartate alla fonte dal
+> 31/07), §4.4 (gli stati sono quattro, non due), «25 marche» (sono 26).
+> Leggere prima `BI-INDICE-DOCUMENTAZIONE.md`.
+
 Documento di consegna per aprire una sessione Claude Code nuova sul progetto
 di business intelligence per l'usato, con i dati raccolti da AutoSmart24.
 
