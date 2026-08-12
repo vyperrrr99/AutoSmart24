@@ -136,6 +136,13 @@ quell'ordine è solido e non è cambiato passando da 4.204 a 51.059 auto — e n
 per attribuire un valore in euro a ciascuna finché non avete un modello che
 controlla le variabili insieme.
 
+Una prova di quanto sia instabile il valore in euro, notata da voi e degna di
+stare qui: la stessa stima del tettuccio, controllata per marca e anno, era
+**+8.975 €** il 09/08 e **+5.540 €** l'11/08. Due misure dello stesso effetto a
+due giorni di distanza, sugli stessi dati e con lo stesso metodo, differiscono
+del **38%** — cambia solo quanto parco abbiamo letto. La graduatoria intanto non
+si è mossa di una posizione.
+
 ## 5. Ricordate `NULL`
 
 Con il 19,5% di copertura, **quattro auto su cinque hanno tutte le booleane a
