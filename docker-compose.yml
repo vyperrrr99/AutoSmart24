@@ -1,6 +1,11 @@
 services:
   postgres:
     image: postgres:16
+    # Senza questo un riavvio del PC lascia giu' tutto: lo scheduler delle
+    # 22:00 vive nel container app, e cron continua a girare trovando l'API
+    # spenta. Le guardie si comportano bene -- rifiutano invece di inventare --
+    # ma non si raccoglie piu' nulla finche' qualcuno non risale a mano.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: autosmart24
       POSTGRES_PASSWORD: autosmart24
@@ -12,6 +17,7 @@ services:
 
   app:
     build: ./scraper
+    restart: unless-stopped
     depends_on:
       - postgres
     environment:
@@ -25,6 +31,7 @@ services:
       - "8001:8000"
 
   dashboard:
+    restart: unless-stopped
     build:
       context: ./dashboard
       args:
