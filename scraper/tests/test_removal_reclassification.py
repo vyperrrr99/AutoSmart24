@@ -289,3 +289,75 @@ def test_resolving_quarantine_reports_what_it_confirmed(db_session):
     db_session.commit()
 
     assert resolve_quarantine(db_session, now=dt.datetime(2026, 8, 5, 0, 0), days=30) == 3
+
+
+# --- chiusure estive ---------------------------------------------------------
+#
+# Trenta giorni bastano tutto l'anno tranne che d'estate. Un concessionario che
+# chiude il primo agosto riapre a settembre: al trentesimo giorno e' ancora in
+# ferie, e dichiarare venduto il suo magazzino sarebbe inventare un mese di
+# vendite che non sono avvenute. Nell'agosto 2026 la quarantena ha raccolto
+# quasi 6.000 annunci, quindi non e' un caso di scuola.
+
+def _in_quarantena(session, lid, sparito_il):
+    row = _listing(session, lid, status="quarantine", sold_at=sparito_il, seen=sparito_il)
+    row.removal_reason = RemovalReason.DEALER_CLOSURE
+    session.commit()
+    return row
+
+
+def test_a_summer_disappearance_is_not_resolved_after_the_usual_month(db_session):
+    """Sparito il primo agosto: al 5 settembre i trenta giorni sono passati, ma
+    i concessionari stanno ancora riaprendo."""
+    _in_quarantena(db_session, "agosto", dt.datetime(2026, 8, 1, 5, 0))
+
+    resolve_quarantine(db_session, now=dt.datetime(2026, 9, 5, 9, 0), days=30)
+
+    assert db_session.get(Listing, "agosto").status == "quarantine"
+
+
+def test_a_summer_disappearance_resolves_once_the_market_has_reopened(db_session):
+    _in_quarantena(db_session, "agosto", dt.datetime(2026, 8, 1, 5, 0))
+
+    resolve_quarantine(db_session, now=dt.datetime(2026, 9, 16, 9, 0), days=30)
+
+    row = db_session.get(Listing, "agosto")
+    assert row.status == "sold"
+    assert row.sold_at == dt.datetime(2026, 8, 1, 5, 0), "la vendita resta datata alla sparizione"
+    assert row.removal_reason == RemovalReason.QUARANTINE_EXPIRED
+
+
+def test_the_reopening_date_is_a_floor_not_a_replacement(db_session):
+    """Sparito il 25 agosto: i trenta giorni scadono il 24 settembre, dopo la
+    ripresa. Vince la regola normale, altrimenti il pavimento accorcerebbe
+    l'attesa invece di allungarla."""
+    _in_quarantena(db_session, "fine-agosto", dt.datetime(2026, 8, 25, 5, 0))
+
+    resolve_quarantine(db_session, now=dt.datetime(2026, 9, 16, 9, 0), days=30)
+
+    assert db_session.get(Listing, "fine-agosto").status == "quarantine"
+
+    resolve_quarantine(db_session, now=dt.datetime(2026, 9, 25, 9, 0), days=30)
+
+    assert db_session.get(Listing, "fine-agosto").status == "sold"
+
+
+def test_outside_the_summer_window_nothing_changes(db_session):
+    """Una sparizione di marzo non ha niente a che vedere con le ferie."""
+    _in_quarantena(db_session, "marzo", dt.datetime(2026, 3, 1, 5, 0))
+
+    resolve_quarantine(db_session, now=dt.datetime(2026, 4, 1, 9, 0), days=30)
+
+    assert db_session.get(Listing, "marzo").status == "sold"
+
+
+def test_the_summer_rule_repeats_every_year(db_session):
+    """Ricavata dall'anno della sparizione, non da date fisse: altrimenti
+    varrebbe solo per il 2026 e nessuno se ne accorgerebbe."""
+    _in_quarantena(db_session, "2027", dt.datetime(2027, 8, 3, 5, 0))
+
+    resolve_quarantine(db_session, now=dt.datetime(2027, 9, 5, 9, 0), days=30)
+    assert db_session.get(Listing, "2027").status == "quarantine"
+
+    resolve_quarantine(db_session, now=dt.datetime(2027, 9, 16, 9, 0), days=30)
+    assert db_session.get(Listing, "2027").status == "sold"

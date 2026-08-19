@@ -50,6 +50,33 @@ class RemovalReason:
 # evidence of sale.
 QUARANTINE_DAYS = 30
 
+# Thirty days is enough all year except in summer. An Italian dealer who shuts
+# on the first of August is still shut on the thirtieth day, and calling their
+# stock sold would invent a month of sales that never happened. In August 2026
+# quarantine collected nearly 6,000 listings, so this is not a hypothetical.
+#
+# Dates rather than a longer window: the wait needs to end when the market
+# reopens, not a fixed span later. Derived from the year the car vanished, so
+# the rule repeats every year instead of being true only for 2026.
+CHIUSURA_ESTIVA = ((7, 15), (8, 31))
+RIPRESA_AUTUNNALE = (9, 15)
+
+
+def risolvibile_dal(sold_at: dt.datetime, days: int = QUARANTINE_DAYS) -> dt.datetime:
+    """Quando l'assenza di questo annuncio puo' valere come vendita.
+
+    La ripresa e' un pavimento, non un sostituto: chi sparisce il 25 agosto
+    aspetta comunque i suoi trenta giorni, che scadono dopo. Prendere sempre
+    la data di ripresa accorcerebbe l'attesa invece di allungarla.
+    """
+    normale = sold_at + dt.timedelta(days=days)
+    (mese_da, giorno_da), (mese_a, giorno_a) = CHIUSURA_ESTIVA
+    inizio = dt.datetime(sold_at.year, mese_da, giorno_da)
+    fine = dt.datetime(sold_at.year, mese_a, giorno_a, 23, 59, 59)
+    if inizio <= sold_at <= fine:
+        return max(normale, dt.datetime(sold_at.year, *RIPRESA_AUTUNNALE))
+    return normale
+
 
 def _fingerprint(row: Listing) -> tuple:
     """What identifies a car well enough to compare two listings.
@@ -176,6 +203,8 @@ def resolve_quarantine(session: Session, now: dt.datetime, days: int = QUARANTIN
 
     `sold_at` is untouched, so the sale is dated when the car vanished rather
     than when we accepted it.
+
+    Summer disappearances wait longer -- see risolvibile_dal.
     """
     cutoff = now - dt.timedelta(days=days)
     rows = session.execute(
@@ -185,6 +214,10 @@ def resolve_quarantine(session: Session, now: dt.datetime, days: int = QUARANTIN
             Listing.sold_at < cutoff,
         )
     ).scalars().all()
+    # Il filtro SQL e' solo un prefiltro veloce: la finestra estiva sposta la
+    # scadenza in avanti, mai indietro, quindi chi non ha superato i giorni
+    # normali non puo' comunque essere pronto.
+    rows = [r for r in rows if risolvibile_dal(r.sold_at, days) <= now]
     for row in rows:
         row.status = "sold"
         # Distinct from a directly observed sale: this one rests on a month of
