@@ -228,3 +228,60 @@ def test_get_negative_retries_behaves_like_zero_retries():
         client.get("https://example.test/negative-retries")
 
     assert route.call_count == 1
+
+
+# --- proxy ------------------------------------------------------------------
+#
+# La seconda macchina raccoglie dallo stesso sito con un IP diverso. Senza
+# proxy configurabile uscirebbe con l'IP di casa, cioe' lo stesso della prima:
+# raddoppierebbe la frequenza sullo stesso indirizzo, che e' il modo piu'
+# rapido per farsi bloccare entrambe.
+
+def test_no_proxy_configured_leaves_the_client_direct(monkeypatch):
+    monkeypatch.delenv("SCRAPE_PROXY", raising=False)
+    c = make_client(0.0, 0.0)
+    assert c.proxy_url is None
+    c.close()
+
+
+def test_the_proxy_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("SCRAPE_PROXY", "http://utente:chiave@proxy.esempio:8080")
+    c = make_client(0.0, 0.0)
+    assert c.proxy_url == "http://utente:chiave@proxy.esempio:8080"
+    c.close()
+
+
+def test_an_explicit_proxy_beats_the_environment(monkeypatch):
+    """Perche' si possa provarne uno senza toccare la configurazione."""
+    monkeypatch.setenv("SCRAPE_PROXY", "http://dall-ambiente:8080")
+    c = make_client(0.0, 0.0, proxy_url="http://esplicito:9090")
+    assert c.proxy_url == "http://esplicito:9090"
+    c.close()
+
+
+def test_an_empty_proxy_variable_means_no_proxy(monkeypatch):
+    """Una variabile impostata a stringa vuota e' il modo normale di
+    disattivarla in un file di ambiente: non deve diventare un proxy vuoto."""
+    monkeypatch.setenv("SCRAPE_PROXY", "")
+    c = make_client(0.0, 0.0)
+    assert c.proxy_url is None
+    c.close()
+
+
+def test_httpx_actually_receives_the_proxy(monkeypatch):
+    """Non basta che il campo sia valorizzato: deve arrivare a httpx.
+
+    I test qui sopra guardano `proxy_url`, quindi restano verdi anche se il
+    valore non viene passato al client -- e le richieste uscirebbero dall'IP di
+    casa credendo di uscire dal proxy. Questo controlla il montaggio vero.
+    """
+    monkeypatch.setenv("SCRAPE_PROXY", "http://proxy.esempio:8080")
+    con = make_client(0.0, 0.0)
+    monkeypatch.delenv("SCRAPE_PROXY")
+    senza = make_client(0.0, 0.0)
+    try:
+        assert con.client._mounts, "nessun proxy montato: le richieste uscirebbero dirette"
+        assert not senza.client._mounts, "montato un proxy che non era configurato"
+    finally:
+        con.close()
+        senza.close()

@@ -1,0 +1,43 @@
+# Chi raccoglie cosa. Le due macchine devono lavorare su marche DISGIUNTE.
+#
+# Non e' una preferenza: BrandRunGuard e QueueController vivono nella memoria
+# del processo e non si coordinano fra host. Due macchine sulla stessa marca
+# farebbero il doppio del lavoro sullo stesso bersaglio, raddoppiando la
+# frequenza di richieste proprio sulle pagine che ci hanno gia' fatto bloccare.
+#
+# Ripartizione calcolata il 22/08/2026 bilanciando il lavoro vero -- pagine di
+# ricerca piu' pagine di dettaglio ancora da leggere -- non il numero di marche.
+# Sbilanciamento 0,1%.
+#
+# Il database e' uno solo, quello del ThinkPad, raggiunto via Tailscale. Niente
+# travaso: quello che la seconda macchina scrive e' immediatamente qui.
+
+thinkpad:
+  - fiat
+  - opel
+  - mini
+  - alfa-romeo
+  - lancia
+  - jeep
+  - porsche
+  - toyota
+  - hyundai
+  - skoda
+  - nissan
+
+windows:
+  - bmw
+  - mercedes-benz
+  - audi
+  - peugeot
+  - renault
+  - citroen
+  - land-rover
+  - smart
+  - ford
+  - kia
+  - volvo
+  - dacia
+  - volkswagen
+  - cupra
+  - mg

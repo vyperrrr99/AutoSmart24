@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -40,6 +41,11 @@ class RateLimitedClient:
     rate_controller: BlockRateTracker | None = None
     sleep_fn: Callable[[float], None] = field(default=time.sleep)
     retries: int = 2
+    # Una seconda macchina raccoglie dallo stesso sito con un IP diverso. Senza
+    # proxy uscirebbe con lo stesso indirizzo della prima: raddoppierebbe la
+    # frequenza su quell'IP, che e' il modo piu' rapido per far bloccare
+    # entrambe invece di aggiungere capacita'.
+    proxy_url: str | None = None
     client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -47,6 +53,7 @@ class RateLimitedClient:
             headers={"User-Agent": self.user_agent, "Accept-Language": "it-IT,it;q=0.9"},
             timeout=15.0,
             follow_redirects=True,
+            proxy=self.proxy_url,
         )
 
     def get(self, url: str) -> httpx.Response:
@@ -89,8 +96,14 @@ def make_client(
     rate_controller: BlockRateTracker | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     retries: int = 2,
+    proxy_url: str | None = None,
 ) -> RateLimitedClient:
+    # `or None` e non `get(..., None)`: in un file di ambiente si disattiva una
+    # variabile lasciandola vuota, e una stringa vuota passata a httpx non e'
+    # "nessun proxy", e' un proxy senza indirizzo.
+    proxy_url = proxy_url or os.environ.get("SCRAPE_PROXY") or None
     return RateLimitedClient(
+        proxy_url=proxy_url,
         min_delay_seconds=min_delay_seconds,
         max_delay_seconds=max_delay_seconds,
         user_agent=random.choice(USER_AGENTS),

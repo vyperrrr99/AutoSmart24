@@ -19,4 +19,3 @@
 5 */2 * * * /usr/bin/flock -n /tmp/auto1-ciclo.lock /bin/bash -c 'cd /home/vperrone/AutoSmart-BI && BI_TARGET=locale PYTHONPATH=src .venv/bin/python scripts/auto1_ciclo.py' >> /home/vperrone/AutoSmart-BI/auto1-ciclo.log 2>&1
 # 22/08: riattivata. Ora lo script si rifiuta di allargare se il sito ci ha
 # bloccati nelle ultime 24h, e ogni giro e' limitato a 2.000 pagine di dettaglio.
-0 21 * * * /usr/bin/flock -n /tmp/allarga-finestra.lock /bin/bash /home/vperrone/AutoSmart24/scripts/allarga-finestra.sh >> /home/vperrone/AutoSmart24/allarga-finestra.log 2>&1
