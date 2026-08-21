@@ -1592,3 +1592,60 @@ def test_the_used_car_threshold_is_exclusive_at_1000_km(db_session):
 
     assert db_session.get(Listing, "just-under") is None, "999 km is not a used car"
     assert db_session.get(Listing, "exactly") is not None, "1000 km is"
+
+
+def test_process_detail_backlog_stops_at_the_page_budget(db_session):
+    """Un arretrato enorme non va smaltito tutto in una notte.
+
+    Il 19 e il 21 agosto 2026 lo stesso arretrato Fiat -- 11.780 pagine
+    comparse allargando la finestra a 15 anni -- ha fatto prendere un 429 due
+    volte: a concorrenza 8 dopo 24 minuti, a concorrenza 5 dopo 83. La coda si
+    fermava, e con essa tutte le marche successive.
+
+    Senza un tetto non esiste concorrenza abbastanza bassa: il ciclo gira
+    finche' la coda non e' vuota, quindi la durata la decide l'arretrato. Col
+    tetto la stessa coda si smaltisce in piu' notti e nessuna di quelle notti
+    supera una soglia nota.
+    """
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    for i in range(10):
+        db_session.add(_existing_listing(f"arretrato-{i}", 2000 + i, detail_scraped=False))
+    db_session.commit()
+
+    letti = []
+
+    def fake_fetch_detail(client, url):
+        letti.append(url)
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run,
+        concurrency=1, db_page_size=3, fetch_detail_fn=fake_fetch_detail,
+        max_pages=4,
+    )
+
+    assert len(letti) <= 4, f"il tetto non ha fermato nulla: {len(letti)} pagine lette"
+    rimasti = db_session.query(Listing).filter(Listing.detail_scraped.is_(False)).count()
+    assert rimasti >= 6, "le pagine non lette devono restare in coda per la volta dopo"
+
+
+def test_process_detail_backlog_without_a_budget_still_drains_everything(db_session):
+    """Il tetto e' facoltativo: senza, il comportamento e' quello di sempre."""
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+    for i in range(7):
+        db_session.add(_existing_listing(f"senza-tetto-{i}", 3000 + i, detail_scraped=False))
+    db_session.commit()
+
+    def fake_fetch_detail(client, url):
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run,
+        concurrency=2, db_page_size=3, fetch_detail_fn=fake_fetch_detail,
+    )
+
+    assert db_session.query(Listing).filter(Listing.detail_scraped.is_(False)).count() == 0

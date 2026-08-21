@@ -1,0 +1,19 @@
+30 9 * * * cd /home/vperrone/AutoSmart-BI && PYTHONPATH=src .venv/bin/python scripts/snapshot_giornaliero.py >> snapshot.log 2>&1
+# fermata il 06/08/2026: i dati vivono sul PC, Supabase resta solo per l accesso
+#0 9 * * * /usr/bin/flock -n /tmp/sync-supabase.lock /bin/bash /home/vperrone/AutoSmart24/scripts/sync-supabase.sh >> /home/vperrone/AutoSmart24/sync-supabase.log 2>&1
+*/30 22-23,0-5 * * * /usr/bin/flock -n /tmp/avvia-se-mancato.lock /bin/bash /home/vperrone/AutoSmart24/scripts/avvia-se-mancato.sh >> /home/vperrone/AutoSmart24/avvio-recupero.log 2>&1
+0 10 1 * * /usr/bin/flock -n /tmp/rileva-reti.lock /usr/bin/sudo -n docker compose -f /home/vperrone/AutoSmart24/docker-compose.yml run --rm --no-deps -v /home/vperrone/AutoSmart24/scripts:/scripts -v /home/vperrone/AutoSmart24/config:/app/config -v /home/vperrone/AutoSmart24/stato:/app/stato app python /scripts/rileva-reti.py >> /home/vperrone/AutoSmart24/rileva-reti.log 2>&1
+0 8 * * 0 /usr/bin/flock -n /tmp/prova-ripristino.lock /bin/bash -c 'cd /home/vperrone/AutoSmart-BI && PYTHONPATH=src .venv/bin/python scripts/prova_ripristino.py' >> /home/vperrone/AutoSmart-BI/prova-ripristino.log 2>&1
+30 7 * * * /usr/bin/flock -n /tmp/backup-bi.lock /bin/bash -c 'cd /home/vperrone/AutoSmart-BI && PYTHONPATH=src .venv/bin/python scripts/backup_giornaliero.py' >> /home/vperrone/AutoSmart-BI/backup.log 2>&1
+15 9 * * * /usr/bin/flock -n /tmp/rinfresca-mv.lock /bin/bash -c 'cd /home/vperrone/AutoSmart-BI && BI_TARGET=locale PYTHONPATH=src .venv/bin/python scripts/rinfresca_mv.py' >> /home/vperrone/AutoSmart-BI/rinfresca-mv.log 2>&1
+# 06/08/2026: la riclassificazione era dentro sync-supabase.sh (riga sopra,
+# commentata quando la BI ha lasciato Supabase). Non e' un passo della
+# pubblicazione: e' la manutenzione del database locale, che ora e' l'unica
+# copia che la BI legge. Senza, un terzo delle 'vendite' resta inventato.
+0 9 * * * /usr/bin/flock -n /tmp/riclassifica.lock /bin/bash /home/vperrone/AutoSmart24/scripts/riclassifica-notturna.sh >> /home/vperrone/AutoSmart24/riclassifica.log 2>&1
+# 09/08/2026: recupero una tantum di dotazioni e vernice sulle ~250.000 auto
+# lette prima che le colonne esistessero. Un blocco all'ora nella finestra in
+# cui lo scraper e' fermo; lo script rifiuta di partire se una scansione e'
+# in corso. Da togliere quando il recupero e' finito (lo dira' nel log).
+5 10-20 * * * /usr/bin/flock -n /tmp/recupera-dotazioni.lock /bin/bash /home/vperrone/AutoSmart24/scripts/recupera-dotazioni.sh >> /home/vperrone/AutoSmart24/recupera-dotazioni.log 2>&1
+5 */2 * * * /usr/bin/flock -n /tmp/auto1-ciclo.lock /bin/bash -c 'cd /home/vperrone/AutoSmart-BI && BI_TARGET=locale PYTHONPATH=src .venv/bin/python scripts/auto1_ciclo.py' >> /home/vperrone/AutoSmart-BI/auto1-ciclo.log 2>&1

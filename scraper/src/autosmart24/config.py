@@ -37,3 +37,16 @@ RESULTS_PER_PAGE = 20
 # than eighteen months declare none, so treating the gap as new-stock costs
 # almost nothing.
 MIN_USED_CAR_KM = 1000
+
+# Quante pagine di dettaglio al massimo si leggono in un giro per marca.
+#
+# Senza tetto il ciclo dell'arretrato gira finche' la coda non e' vuota, quindi
+# la durata la decide l'arretrato e non noi. Allargando la finestra a 15 anni
+# Fiat si e' ritrovata 11.780 pagine da leggere e ha fatto prendere un 429 due
+# volte: a concorrenza 8 dopo 24 minuti, a concorrenza 5 dopo 83. Ogni volta la
+# coda si e' fermata, e con essa tutte le marche successive.
+#
+# 2.000 pagine sono circa 40 minuti a concorrenza 5: sotto la soglia a cui
+# siamo stati bloccati, e un arretrato come quello di Fiat si smaltisce in sei
+# notti senza che nessuna di esse esca dai binari.
+DETAIL_PAGES_PER_RUN = 2000

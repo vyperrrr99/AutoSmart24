@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from autosmart24.config import MIN_USED_CAR_KM, BrandConfig
+from autosmart24.config import DETAIL_PAGES_PER_RUN, MIN_USED_CAR_KM, BrandConfig
 from autosmart24.db.dealers import upsert_dealer
 from autosmart24.db.models import Dealer, Listing, PriceHistory, ScrapeEvent, ScrapeRun
 from autosmart24.equipment import COLUMNS as EQUIPMENT_COLUMNS
@@ -45,8 +45,23 @@ def process_detail_backlog(
     fetch_detail_fn=fetch_detail,
     exclude_ids: set[str] = frozenset(),
     year_from: int | None = None,
+    max_pages: int | None = None,
 ) -> int:
+    """`max_pages` limita quante pagine di dettaglio si leggono in un giro.
+
+    Un arretrato enorme non va smaltito tutto in una notte. L'arretrato Fiat
+    nato allargando la finestra a 15 anni -- 11.780 pagine -- ha fatto prendere
+    un 429 due volte, a concorrenza 8 dopo 24 minuti e a concorrenza 5 dopo 83:
+    fermando la coda, e con essa tutte le marche successive. Non esiste una
+    concorrenza abbastanza bassa, perche' senza tetto la durata del giro la
+    decide l'arretrato e non noi.
+
+    Le pagine non lette restano `detail_scraped = false` e le riprende il giro
+    dopo: la coda si smaltisce in piu' notti, nessuna delle quali supera una
+    soglia nota.
+    """
     total_reported = 0
+    pagine_lette = 0
     # Rows the pool did not report on are parked here for the rest of this call,
     # so the LIMIT-ed query can never re-select the same unprocessable row
     # forever. Without this, one permanently-failing detail page becomes an
@@ -91,6 +106,17 @@ def process_detail_backlog(
 
         if not pending:
             return total_reported
+
+        if max_pages is not None:
+            resta = max_pages - pagine_lette
+            if resta <= 0:
+                _log_event(session, run, "info",
+                       f"Detail budget reached: {pagine_lette} pages this run, "
+                       f"the rest stays queued for the next one")
+                session.commit()
+                return total_reported
+            pending = pending[:resta]
+        pagine_lette += len(pending)
 
         rows_by_id = {row.id: row for row in pending}
         jobs = [(row.id, row.url) for row in pending]
@@ -527,7 +553,7 @@ def run_brand_sweep(
             )
             session.commit()
             backlog_removed_reports = process_detail_backlog(
-                session, client_factory, brand, run,
+                session, client_factory, brand, run, max_pages=DETAIL_PAGES_PER_RUN,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
             )
@@ -638,7 +664,7 @@ def run_brand_sweep(
             # write a different car's fields onto this row before the
             # confirmation pass marks it sold at that foreign price.
             backlog_removed_reports = process_detail_backlog(
-                session, client_factory, brand, run,
+                session, client_factory, brand, run, max_pages=DETAIL_PAGES_PER_RUN,
                 concurrency=concurrency, session_refresh_requests=session_refresh_requests,
                 fetch_detail_fn=fetch_detail_fn, year_from=year_from,
                 exclude_ids=set(sold_candidates),

@@ -17,6 +17,8 @@ set -uo pipefail
 cd /home/vperrone/AutoSmart24
 
 API=http://localhost:8001
+# Quanto si aspetta prima di riprendere da soli dopo un blocco del sito.
+RAFFREDDAMENTO_MINUTI=180
 PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
 STAMP=$(date '+%d/%m %H:%M:%S')
 
@@ -55,8 +57,38 @@ esac
 
 case "$QUEUE" in
   *'"halted":true'*)
-    echo "$STAMP coda ferma dopo un blocco — NON avvio. Riprendi con: curl -X POST $API/queue/resume"
-    exit 1 ;;
+    # Un 429 non e' un divieto, e' una limitazione di frequenza: passa da solo.
+    # Fermarsi e' giusto, restare fermi per sempre no. Lo stato del blocco vive
+    # nella memoria del processo e nessuno lo toglie mai: il 19/08 un 429 alle
+    # 23:57 su Fiat ha fermato la coda, e senza qualcuno che se ne accorgesse
+    # sarebbe rimasta ferma indefinitamente. Una notte gia' persa, e tutte le
+    # successive.
+    #
+    # Dopo un periodo di silenzio si riprende da soli. Tre ore: abbondanti per
+    # una finestra di rate limiting, e abbastanza brevi da recuperare la stessa
+    # notte se il blocco arriva presto.
+    FERMA_DA=$(echo "$QUEUE" | python3 -c "
+import sys, json, datetime as dt
+q = json.load(sys.stdin)
+t = q.get('halted_at')
+if not t:
+    print(-1); raise SystemExit
+print(int((dt.datetime.utcnow() - dt.datetime.fromisoformat(t)).total_seconds() // 60))" 2>/dev/null)
+
+    if [ -z "$FERMA_DA" ] || ! [ "$FERMA_DA" -ge 0 ] 2>/dev/null; then
+      echo "$STAMP coda ferma, ora del blocco illeggibile - non decido da solo. Riprendi con: curl -X POST $API/queue/resume"
+      exit 1
+    fi
+    if [ "$FERMA_DA" -lt "$RAFFREDDAMENTO_MINUTI" ]; then
+      echo "$STAMP coda ferma da ${FERMA_DA} min per un blocco del sito - attendo, riprendo dopo $RAFFREDDAMENTO_MINUTI min"
+      exit 0
+    fi
+    echo "$STAMP coda ferma da ${FERMA_DA} min: raffreddamento finito, riprendo da solo"
+    if ! curl -s -m 15 -X POST "$API/queue/resume" >/dev/null 2>&1; then
+      echo "$STAMP ripresa FALLITA - la coda resta ferma"
+      exit 1
+    fi
+    ;;
 esac
 
 BRANDS=$(curl -s -m 15 "$API/brands" 2>/dev/null | python3 -c "
