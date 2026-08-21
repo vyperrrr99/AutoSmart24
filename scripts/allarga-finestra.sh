@@ -39,6 +39,16 @@ if [ -f "$STAMPO" ] && [ "$(cat "$STAMPO")" = "$(date '+%Y-%m-%d')" ]; then
   exit 0
 fi
 
+# Non si allarga sopra un guasto aperto. Il 19/08 il primo scaglione ha fatto
+# prendere un 429 a Fiat: la coda si e' fermata e ci sono costate due notti.
+# Aggiungere altre marche mentre il sito ci sta ancora respingendo peggiora un
+# problema invece di aspettare che passi.
+BLOCCHI=$($PSQL -c "SELECT count(*) FROM scrape_runs WHERE status='blocked' AND started_at >= now() - interval '24 hours';" | tr -d ' ')
+if [ -n "$BLOCCHI" ] && [ "$BLOCCHI" != "0" ]; then
+  echo "$(date '+%d/%m %H:%M') $BLOCCHI blocchi del sito nelle ultime 24h — non allargo, riprovo domani"
+  exit 0
+fi
+
 RESTANTI=$($PSQL -c "SELECT count(*) FROM tracked_brands WHERE year_from_years < 15;" | tr -d ' ')
 if [ -z "$RESTANTI" ]; then echo "$(date '+%d/%m %H:%M') database non raggiungibile"; exit 1; fi
 if [ "$RESTANTI" = "0" ]; then
