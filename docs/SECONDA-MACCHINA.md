@@ -43,35 +43,41 @@ Tailscale — non da reti pubbliche.
 
 ## 3. Avvio
 
-```bash
+**I comandi qui sotto sono su una riga sola, apposta.** PowerShell non usa la
+barra rovescia per continuare una riga: spezzando un comando come si fa in bash
+si ottiene `unknown flag: --no-` e il resto sparisce.
+
+```powershell
 git clone https://github.com/vyperrrr99/AutoSmart24.git
 cd AutoSmart24
-
-# Il proxy, se lo usi, va a livello di macchina: httpx onora HTTPS_PROXY da
-# solo. In alternativa scommenta SCRAPE_PROXY nel file qui sotto.
-docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml \
-  up -d --no-deps app
-
-# La divisione delle marche. Il nome e' obbligatorio: eseguirlo con quello
-# sbagliato spegne le tue marche e accende quelle dell'altra macchina.
-bash scripts/applica-divisione.sh windows
+docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml up -d --no-deps app
 ```
 
-Lo script stampa quali marche restano attive e **verifica leggendo l'API**, non
-deducendo dai comandi riusciti. Se l'elenco non corrisponde, si ferma dicendolo.
+Poi la divisione delle marche. Il nome della macchina e' obbligatorio:
+eseguirlo con quello sbagliato spegne le tue marche e accende quelle
+dell'altra.
 
-Verifica che la connessione al database funzioni davvero:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml \
-  run --rm --no-deps app python -c "
-import os; from sqlalchemy import create_engine, text
-e = create_engine(os.environ['DATABASE_URL'])
-with e.connect() as c:
-    print('annunci a database:', c.execute(text('SELECT count(*) FROM listings')).scalar())"
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml run --rm --no-deps -v ${PWD}/config:/app/config -v ${PWD}/scripts:/scripts app python /scripts/applica-divisione.py windows
 ```
 
-Se stampa un numero intorno ai 350.000, sei collegato al database giusto.
+Aggiungi `--prova` in fondo per vedere cosa farebbe senza toccare nulla.
+
+Lo script **verifica rileggendo l'API**, non deducendo dai comandi riusciti: se
+le marche attive non corrispondono alla divisione si ferma dicendolo. Passa
+dall'API e non dal database perche' mettere in pausa e' due cose -- la riga in
+`tracked_brands` e il lavoro nello scheduler in memoria -- e toccando solo il
+database la marca ripartirebbe lo stesso alle 22:00.
+
+Verifica che la connessione al database sia davvero quella del ThinkPad:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml run --rm --no-deps app python -c "import os; from sqlalchemy import create_engine, text; e=create_engine(os.environ['DATABASE_URL']); c=e.connect(); print('annunci:', c.execute(text('SELECT count(*) FROM listings')).scalar())"
+```
+
+Intorno ai 350.000 significa che sei sul database giusto. Un errore di
+connessione significa che Tailscale non e' attivo su questa macchina, oppure
+che il ThinkPad e' spento.
 
 ## 4. Le tue marche
 
@@ -134,26 +140,12 @@ Da provare **prima** di lanciare un giro intero: le VPN commerciali hanno IP di
 uscita condivisi che i sistemi anti-bot spesso conoscono già, quindi possono
 essere bloccati *più* in fretta di una connessione domestica.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml \
-  run --rm --no-deps app python -c "
-import sys, time; sys.path.insert(0,'/app/src')
-from sqlalchemy import create_engine, text; import os
-from autosmart24.scraping.http_client import make_client
-from autosmart24.scraping.detail_queue import fetch_detail
-e = create_engine(os.environ['DATABASE_URL'])
-with e.connect() as c:
-    urls = [r[0] for r in c.execute(text(
-      \"SELECT url FROM listings WHERE status='active' AND detail_scraped LIMIT 20\"))]
-cl = make_client(3.0, 8.0); ok = 0
-for u in urls:
-    try:
-        fetch_detail(cl, u); ok += 1
-    except Exception as ex:
-        print('fermato dopo', ok, 'pagine:', type(ex).__name__); break
-else:
-    print('20 pagine su 20: l uscita e buona')"
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.seconda-macchina.yml run --rm --no-deps -v ${PWD}/scripts:/scripts app python /scripts/prova-proxy.py
 ```
+
+Dice anche quale proxy sta usando, cosi' se ti aspettavi Surfshark e stampa
+«connessione diretta» sai che la variabile non e' arrivata al contenitore.
 
 Venti su venti significa che l'IP è pulito. Un `BlockedError` nei primi
 tentativi significa che quell'uscita è già segnata: cambiala, o prova senza
