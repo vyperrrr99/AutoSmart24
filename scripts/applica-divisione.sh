@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# NON IN USO -- assetto abbandonato il 22/08/2026.
+#
+# La seconda macchina non e' mai entrata in servizio: Surfshark non riesce a
+# dare al contenitore su Windows un indirizzo di uscita separato senza rompere
+# Tailscale. Si lavora su una macchina sola con tutte e 26 le marche attive.
+#
+# ATTENZIONE: eseguirlo adesso metterebbe in pausa meta' catalogo.
+# Conservato perche' torna utile se un giorno la divisione si rifa'.
+
 # Mette in pausa le marche che tocca all'ALTRA macchina, e riattiva le proprie.
 #
 #   bash scripts/applica-divisione.sh thinkpad

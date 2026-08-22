@@ -1,4 +1,13 @@
 # Seconda macchina: raccogliere in parallelo senza pestarsi i piedi
+> **NON IN USO — assetto abbandonato il 22/08/2026.**
+> La seconda macchina non e' mai entrata in servizio: su Windows Surfshark non
+> riesce a dare al contenitore un indirizzo di uscita separato senza rompere
+> Tailscale, perche' il suo split tunneling ragiona per applicazione e il
+> traffico dei container nasce dentro WSL2, dove non e' attribuibile a nessun
+> eseguibile. Provate tre configurazioni, tutte fallite.
+> Si lavora su **una macchina sola**, tutte e 26 le marche attive, concorrenza 5.
+> Documento conservato perche' l'analisi resta valida se un giorno si riprova.
+
 
 Per la sessione Claude Code sulla macchina **Windows**. Scritto il **22/08/2026**
 dalla sessione sul ThinkPad.

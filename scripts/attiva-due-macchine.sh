@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# NON IN USO -- assetto abbandonato il 22/08/2026.
+#
+# La seconda macchina non e' mai entrata in servizio: Surfshark non riesce a
+# dare al contenitore su Windows un indirizzo di uscita separato senza rompere
+# Tailscale. Si lavora su una macchina sola con tutte e 26 le marche attive.
+#
+# ATTENZIONE: eseguirlo adesso metterebbe in pausa meta' catalogo.
+# Conservato perche' torna utile se un giorno la divisione si rifa'.
+
 # Passaggio a due macchine, da eseguire sul ThinkPad quando la coda e' libera.
 #
 # Fa tre cose che insieme non si possono fare a meta':

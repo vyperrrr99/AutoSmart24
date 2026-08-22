@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """Toglie dal database le auto fuori dal periodo di riferimento.
 
-La regola: il periodo di riferimento definisce cosa deve stare nel database.
-Quello che e' dentro va arricchito e monitorato; quello che e' fuori non serve
-tenerlo, e soprattutto non serve continuare a ricontrollarlo a ogni giro.
+NON E' UNA POLITICA RICORRENTE. E' una rimedio una tantum, e va tenuto tale.
+
+La finestra e' MOBILE: "quindici anni indietro da oggi". Trasformare questo
+strumento in un lavoro pianificato significherebbe cancellare ogni anno gli
+annunci piu' vecchi di quindici anni -- fra dodici mesi le auto del 2011, che
+oggi stiamo raccogliendo apposta e che sono dati veri, correttamente ottenuti.
+Una regola che cambia significato da sola mentre nessuno la guarda.
+
+Cosa e' servito a togliere: 4.234 annunci immatricolati fra il 1941 e il 2010,
+tutti Fiat e **nessuno arricchito**, entrati quando la finestra era diversa e
+poi rimasti in un limbo -- fuori dal filtro per anno della coda, quindi mai
+letti, ma ancora a database. Righe a meta' raccolte per errore.
+
+Se un domani il database diventasse troppo grande, la decisione su cosa
+conservare si prende guardando la dimensione e l'uso che si vuole fare dei
+dati, non applicando automaticamente la finestra di raccolta.
 
 Nasce da un residuo reale: 4.234 annunci immatricolati fra il 1941 e il 2010,
 tutti attivi e **nessuno arricchito**. Erano entrati quando la finestra era
@@ -35,7 +48,14 @@ STATI_POTABILI = ("active", "quarantine", "removed")
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--conferma-una-tantum", action="store_true",
+                    help="obbligatorio per cancellare: vedi il perche' in testa al file")
     args = ap.parse_args()
+    if not args.dry_run and not args.conferma_una_tantum:
+        print("  Rifiuto di cancellare senza --conferma-una-tantum.")
+        print("  Questo strumento NON va pianificato: la finestra e' mobile, e fra un")
+        print("  anno cancellerebbe le auto del 2011 che oggi raccogliamo apposta.")
+        return 2
 
     engine = create_engine(os.environ["DATABASE_URL"])
     anno_corrente = dt.date.today().year

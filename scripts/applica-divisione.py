@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Mette in pausa le marche dell'altra macchina e attiva le proprie.
+"""NON IN USO: assetto a due macchine abbandonato il 22/08/2026.
+
+La seconda macchina non e' mai entrata in servizio (Surfshark non riesce a
+darle un IP di uscita separato senza rompere Tailscale). Eseguirlo adesso
+metterebbe in pausa meta' catalogo. Conservato per un eventuale ritorno.
+
+Mette in pausa le marche dell'altra macchina e attiva le proprie.
 
 Versione portabile della stessa cosa che fa applica-divisione.sh, pensata per
 girare dentro il contenitore: su Windows non si puo' dare per scontato ne' bash
