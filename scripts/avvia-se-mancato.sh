@@ -34,17 +34,13 @@ WHEN="today 22:00"
 [ "$(date '+%H')" -lt 22 ] && WHEN="yesterday 22:00"
 SINCE_UTC=$(date -u -d "@$(date -d "$WHEN" +%s)" '+%Y-%m-%d %H:%M:%S')
 
-STARTED=$($PSQL -c "SELECT count(*) FROM scrape_runs WHERE started_at >= '$SINCE_UTC';" 2>/dev/null | tr -d ' ')
-if [ -z "$STARTED" ]; then
-  echo "$STAMP database non raggiungibile — non decido nulla"
-  exit 1
-fi
-if [ "$STARTED" -gt 0 ]; then
-  exit 0   # il giro è partito: niente da fare, e niente rumore nel log
-fi
-
-# Independent of the window: a round in flight is proof enough that one is
-# happening, whatever the arithmetic above concluded.
+# L'ordine conta, ed e' costato una notte. Prima questo controllo veniva dopo
+# quello sul giro gia' partito, che esce in silenzio: un blocco a meta' giro
+# capita proprio quando il giro E' partito, quindi la ripresa automatica era
+# codice irraggiungibile. Il 22/08 la coda e' rimasta ferma tredici ore con il
+# recupero che girava ogni mezz'ora senza mai guardarla.
+#
+# Lo stato della coda si legge sempre, e un blocco si gestisce sempre.
 QUEUE=$(curl -s -m 10 "$API/queue" 2>/dev/null)
 if [ -z "$QUEUE" ]; then
   echo "$STAMP API non raggiungibile — non avvio alla cieca"
@@ -88,8 +84,24 @@ print(int((dt.datetime.utcnow() - dt.datetime.fromisoformat(t)).total_seconds() 
       echo "$STAMP ripresa FALLITA - la coda resta ferma"
       exit 1
     fi
+    # Riprendere sgancia il blocco ma NON riavvia niente: `pending` e' l'elenco
+    # delle marche configurate, non lavoro in attesa. Verificato sulla coda
+    # vera il 22/08 -- ripresa riuscita, `current` nullo, nessun giro partito.
+    # Si prosegue quindi ad accodare le marche rimaste.
+    echo "$STAMP ripresa riuscita: accodo le marche rimaste"
     ;;
 esac
+
+
+# Quali marche mancano ancora stanotte. Non "e' partito qualcosa": dopo un
+# blocco a meta' giro alcune marche sono andate e altre no, e ripartire da capo
+# rifarebbe il lavoro gia' fatto -- cioe' altro carico sul sito che ci ha
+# appena respinti.
+FATTE=$($PSQL -c "SELECT string_agg(DISTINCT lower(replace(brand,' ','-')), ' ') FROM scrape_runs WHERE started_at >= '$SINCE_UTC' AND status='success';" 2>/dev/null)
+if [ -z "$FATTE" ] && [ "$?" != "0" ]; then
+  echo "$STAMP database non raggiungibile — non decido nulla"
+  exit 1
+fi
 
 BRANDS=$(curl -s -m 15 "$API/brands" 2>/dev/null | python3 -c "
 import sys, json
@@ -101,6 +113,16 @@ if [ -z "$BRANDS" ]; then
   echo "$STAMP nessuna marca attiva o API non raggiungibile — non avvio"
   exit 1
 fi
+
+# Toglie quelle gia' riuscite stanotte.
+DA_FARE=""
+for B in $BRANDS; do
+  case " $FATTE " in *" $B "*) ;; *) DA_FARE="$DA_FARE $B" ;; esac
+done
+if [ -z "$DA_FARE" ]; then
+  exit 0   # tutte fatte: niente da fare, e niente rumore nel log
+fi
+BRANDS="$DA_FARE"
 
 echo "$STAMP il giro non è partito da solo — lo avvio io ($(echo "$BRANDS" | wc -w) marche)"
 for B in $BRANDS; do
