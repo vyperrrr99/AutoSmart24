@@ -56,14 +56,23 @@ class RateLimitedClient:
             proxy=self.proxy_url,
         )
 
-    def get(self, url: str) -> httpx.Response:
+    def get(self, url: str, follow_redirects: bool | None = None) -> httpx.Response:
+        """`follow_redirects=False` restituisce il 3xx invece di seguirlo.
+
+        Serve sulle pagine di dettaglio: AutoScout non risponde 404 per un
+        annuncio sparito, rimanda alla pagina di lista del modello. Seguendo il
+        redirect si scarica una pagina da diecimila risultati al posto di un
+        annuncio, e farlo migliaia di volte di fila e' cio' per cui il sito ci
+        ha bloccati tre volte.
+        """
         attempts = max(0, self.retries) + 1
         for attempt in range(1, attempts + 1):
             multiplier = self.rate_controller.delay_multiplier() if self.rate_controller else 1.0
             delay = random.uniform(self.min_delay_seconds, self.max_delay_seconds) * multiplier
             self.sleep_fn(delay)
             try:
-                response = self.client.get(url)
+                response = self.client.get(url) if follow_redirects is None \
+                    else self.client.get(url, follow_redirects=follow_redirects)
             except httpx.TransportError as exc:
                 if attempt >= attempts:
                     raise
@@ -82,7 +91,11 @@ class RateLimitedClient:
                 raise BlockedError(response.status_code, url)
             if self.rate_controller:
                 self.rate_controller.record_success()
-            response.raise_for_status()
+            # httpx considera un 3xx un errore quando i redirect non vengono
+            # seguiti. Qui invece e' il risultato che ci interessa: chi chiede
+            # di non seguirli vuole vedere dove il sito lo stava mandando.
+            if not (follow_redirects is False and response.is_redirect):
+                response.raise_for_status()
             return response
         raise AssertionError("unreachable: get() loop exited without returning or raising")
 

@@ -100,8 +100,20 @@ def process_detail_backlog(
                     Listing.first_registration >= dt.date(year_from, 1, 1),
                 )
             )
+        # Per id, non per data di avvistamento. Gli id sono UUID casuali, quindi
+        # ordinare per id mescola i modelli; ordinare per data li raggruppa,
+        # perche' gli annunci di uno stesso modello vengono scoperti insieme.
+        #
+        # Su Fiat quel raggruppamento produceva 1.218 richieste consecutive a
+        # URL "fiat-500-..." con lo stesso identificativo di modello, poi 966
+        # "500L", poi 795 "Panda": il profilo di un'enumerazione, che e'
+        # esattamente cio' che i sistemi anti-bot cercano. Audi, che non si e'
+        # mai bloccata, non superava le 318.
+        #
+        # Ordinando per id la sequenza piu' lunga sullo stesso arretrato Fiat
+        # scende da 1.218 a 7, con media 1,23. Misurato, non stimato.
         pending = session.execute(
-            stmt.order_by(Listing.first_seen_at.asc()).limit(db_page_size)
+            stmt.order_by(Listing.id.asc()).limit(db_page_size)
         ).scalars().all()
 
         if not pending:
@@ -140,6 +152,7 @@ def process_detail_backlog(
                 handled.add(listing_id)
                 row = rows_by_id[listing_id]
                 row.last_checked_at = now
+                row.redirect_to = result.redirect_to
                 if result.sold:
                     # This listing is in the enrichment queue precisely because
                     # the search results just showed it alive, so a removal
@@ -693,6 +706,10 @@ def run_brand_sweep(
                 ):
                     row = active_rows_by_id[listing_id]
                     row.last_checked_at = confirm_now
+                    # Registrato sempre, anche quando l'annuncio risulta vivo:
+                    # serve a poter confrontare in seguito chi rediriggeva e
+                    # chi no. Non entra in nessuna decisione, per ora.
+                    row.redirect_to = result.redirect_to
                     if looks_removed(result, row.brand):
                         row.status = "sold"
                         row.sold_at = confirm_now

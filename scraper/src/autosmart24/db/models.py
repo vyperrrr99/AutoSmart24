@@ -119,6 +119,12 @@ class Listing(Base):
     # When several seller identities publish the same car, the copies point at
     # one canonical listing. NULL means "this is the one to count".
     duplicate_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    # Dove il sito ci ha mandati invece di rispondere: pagina di lista del
+    # modello, o l'annuncio di un'altra auto sul nostro id riusato. Raccolto
+    # per capire se predice "ritirato" invece di "venduto"; non ancora usato
+    # per classificare.
+    redirect_to: Mapped[str | None] = mapped_column(String(512), nullable=True)
     sold_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     detail_scraped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

@@ -1649,3 +1649,53 @@ def test_process_detail_backlog_without_a_budget_still_drains_everything(db_sess
     )
 
     assert db_session.query(Listing).filter(Listing.detail_scraped.is_(False)).count() == 0
+
+
+def test_the_backlog_interleaves_models_instead_of_grouping_them(db_session):
+    """L'ordine di lettura non deve raggruppare annunci simili.
+
+    Leggendo per data di primo avvistamento gli annunci escono raggruppati per
+    modello, perche' quelli di uno stesso modello vengono scoperti insieme: su
+    Fiat erano 1.218 richieste consecutive a URL "fiat-500-..." con lo stesso
+    identificativo di modello. E' il profilo di un'enumerazione, ed e' l'unica
+    cosa che distingue Fiat -- bloccata tre volte -- da Audi, che ha lo stesso
+    volume e sequenze massime di 318.
+
+    Gli id sono UUID casuali, quindi ordinare per id mescola i modelli da solo.
+    """
+    run = ScrapeRun(brand="Fiat", started_at=dt.datetime.utcnow(), status="running")
+    db_session.add(run)
+    db_session.flush()
+
+    # Date raggruppate per modello, id che si alternano: e' la situazione vera
+    # in produzione, dove gli UUID non hanno relazione con la data.
+    # Id che si alternano fra i due modelli e date che invece li raggruppano:
+    # e' la situazione vera, dove gli UUID non hanno alcuna relazione col
+    # modello mentre la data di scoperta ce l'ha eccome.
+    base = dt.datetime(2026, 8, 1, 6, 0)
+    for i in range(12):
+        panda = i % 2 == 0
+        riga = _existing_listing(f"{i:02d}-annuncio", 5000 + i, detail_scraped=False)
+        riga.model_group = "Panda" if panda else "500"
+        riga.first_seen_at = base if panda else base + dt.timedelta(days=10)
+        db_session.add(riga)
+    db_session.commit()
+
+    letti = []
+
+    def fake_fetch_detail(client, url):
+        riga = db_session.query(Listing).filter(Listing.url == url).one()
+        letti.append(riga.model_group)
+        return DetailResult(sold=False, data=_fake_detail_data(url))
+
+    process_detail_backlog(
+        db_session, _client, BRAND, run,
+        concurrency=1, db_page_size=4, fetch_detail_fn=fake_fetch_detail,
+    )
+
+    assert len(letti) == 12, letti
+    piu_lunga = massimo = 1
+    for prima, dopo in zip(letti, letti[1:]):
+        piu_lunga = piu_lunga + 1 if dopo == prima else 1
+        massimo = max(massimo, piu_lunga)
+    assert massimo <= 3, f"modelli raggruppati, sequenza da {massimo}: {letti}"
