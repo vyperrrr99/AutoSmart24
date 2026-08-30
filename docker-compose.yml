@@ -11,13 +11,18 @@ services:
       POSTGRES_PASSWORD: autosmart24
       POSTGRES_DB: autosmart24
     ports:
-      # Non 0.0.0.0. Con la sola porta il database sarebbe raggiungibile da
-      # qualunque rete a cui il portatile si colleghi -- un wifi pubblico, un
-      # albergo -- con utente e password banali. Legato a localhost per i
-      # processi di questa macchina (la BI usa localhost:5434) e all'indirizzo
-      # Tailscale per la seconda macchina, che e' una rete privata.
+      # Solo localhost. Non 0.0.0.0, che renderebbe il database raggiungibile
+      # da qualunque rete a cui il portatile si colleghi -- un wifi pubblico,
+      # un albergo -- con utente e password banali.
+      #
+      # E non piu' l'indirizzo Tailscale, che serviva alla seconda macchina
+      # ormai abbandonata. Legarsi a un IP che al momento del boot potrebbe non
+      # esistere ancora e' una fragilita' vera: il 30/08, dopo cinque giorni di
+      # spegnimento, Docker e' partito prima di tailscaled, postgres non e'
+      # riuscito a legarsi ed e' uscito, e con lui e' rimasto giu' tutto --
+      # app in ciclo di riavvio e nessuna raccolta. Se un giorno servisse di
+      # nuovo, va aggiunta anche una dipendenza dall'interfaccia.
       - "127.0.0.1:5434:5432"
-      - "100.117.184.118:5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -30,11 +35,17 @@ services:
       DATABASE_URL: postgresql+psycopg://autosmart24:autosmart24@postgres:5432/autosmart24
       SCRAPE_MIN_DELAY_SECONDS: "3"
       SCRAPE_MAX_DELAY_SECONDS: "8"
-      # Tornata a 8 il 22/08: il lavoro si divide su due macchine con IP
-      # distinti, quindi la frequenza su ciascun indirizzo resta quella di
-      # sempre. A 5 il solo giro di ricerca occupava 9,6 ore e non lasciava
-      # margine per smaltire gli arretrati.
-      SCRAPE_CONCURRENCY: "8"
+      # Tornata a 5 il 22/08. L'8 era giustificato solo dalla divisione su due
+      # macchine con IP distinti, che e' stata annullata: su Windows Surfshark
+      # non riesce a dare al contenitore un indirizzo di uscita separato senza
+      # rompere Tailscale, perche' il suo split tunneling ragiona per
+      # applicazione e il traffico dei container nasce dentro WSL2, dove non e'
+      # attribuibile a nessun eseguibile.
+      #
+      # Da notare: la concorrenza non e' la causa dei blocchi su Fiat. Dei tre,
+      # due sono avvenuti a 8 (19/08 e 22/08, dopo 24 e 25 minuti) e uno a 5
+      # (21/08, dopo 83). Scendere allunga la resistenza, non la garantisce.
+      SCRAPE_CONCURRENCY: "5"
       SCRAPE_MAX_LISTING_AGE_YEARS: "5"
       SCRAPE_SESSION_REFRESH_REQUESTS: "30"
     ports:
