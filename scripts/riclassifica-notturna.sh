@@ -77,4 +77,13 @@ echo "$OUT" | grep -vE 'Deprecation|warnings.warn' | tail -6 | sed 's/^/  /'
 # Dopo la conclusione, mai prima: un file scritto all'avvio direbbe "pronto"
 # mentre il lavoro e' a meta'.
 scrivi_esito "ok" ""
+
+# Sorveglianza di un mese sul difetto dei redirect chiuso il 25/08/2026: se
+# ricompare un altro blocco di "mai arricchiti" lo vediamo qui invece che
+# scoprirlo per caso. Solo un report -- non tocca l'esito della notte.
+sudo -n docker compose run --rm --no-deps \
+  -v "$PWD/scripts:/scripts" -v "$PWD/stato:/app/stato" \
+  app python /scripts/controllo-redirect-mensile.py 2>&1 \
+  | grep -vE 'Deprecation|warnings.warn' | sed 's/^/  /'
+
 echo "=== conclusa $(date '+%H:%M:%S') ==="

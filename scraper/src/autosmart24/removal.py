@@ -44,6 +44,20 @@ class RemovalReason:
     REPUBLISHED = "republished"
     DEALER_CLOSURE = "dealer_closure"
     QUARANTINE_EXPIRED = "quarantine_expired"
+    # A detail page that redirects to the model's list page instead of
+    # answering 404/410 -- see scraping.detail_queue. Confirmed sold by
+    # looks_removed, but never enriched (no dealer_id), so twin_on_sale and
+    # republished had no fingerprint to check it against: it passed
+    # reclassification unverified, not because it was verified.
+    #
+    # 374 such rows, all Fiat, all dated 23/08/2026 -- the day Fiat's backlog
+    # of listings undiscovered for weeks finally got processed. A weaker
+    # proxy check (seller name + city instead of dealer_id, no drive_train)
+    # found a twin still on sale for only 12.4% of the checkable ones and
+    # 87.1% with no match at all, consistent with real sales -- but "mostly
+    # look real" is not verified, and the metric this project exists to
+    # protect does not get the benefit of the doubt.
+    REDIRECT_UNVERIFIED = "redirect_unverified"
 
 
 # How long a wholesale disappearance is held before absence is accepted as
@@ -192,6 +206,39 @@ def reclassify_removals(session: Session, since: dt.datetime) -> Counter:
         changed[reason] += 1
 
     return changed
+
+
+def strip_unverifiable_redirect_sales(session: Session) -> int:
+    """Pulls out sales whose only evidence was a redirect on a listing that was
+    never enriched. Returns how many.
+
+    twin_on_sale and republished need dealer_id to compare a disappeared
+    listing against the dealer's other stock. A listing that vanished before
+    ever being enriched has no dealer_id and never will: its page is gone.
+    Such a row passes reclassification with no reason recorded, not because
+    it was checked and cleared, but because there was nothing to check it
+    against.
+
+    Deliberately a one-time sweep over the backlog this project's own defect
+    created, not a rule that runs every morning: once enrichment catches up, a
+    disappearance on an already-enriched listing keeps the dealer_id it got
+    while it was live, and twin_on_sale/republished judge it with the real
+    fingerprint automatically. Recurrence is watched for separately -- see
+    scripts/controllo-redirect-mensile.py -- rather than silently reclassified
+    here every run.
+    """
+    rows = session.execute(
+        select(Listing).where(
+            Listing.status == "sold",
+            Listing.redirect_to.is_not(None),
+            Listing.dealer_id.is_(None),
+        )
+    ).scalars().all()
+    for row in rows:
+        row.status = "removed"
+        row.removal_reason = RemovalReason.REDIRECT_UNVERIFIED
+        row.sold_at = None
+    return len(rows)
 
 
 def resolve_quarantine(session: Session, now: dt.datetime, days: int = QUARANTINE_DAYS) -> int:

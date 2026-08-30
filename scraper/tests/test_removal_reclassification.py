@@ -26,6 +26,7 @@ from autosmart24.removal import (
     RemovalReason,
     reclassify_removals,
     resolve_quarantine,
+    strip_unverifiable_redirect_sales,
 )
 
 
@@ -361,3 +362,65 @@ def test_the_summer_rule_repeats_every_year(db_session):
 
     resolve_quarantine(db_session, now=dt.datetime(2027, 9, 16, 9, 0), days=30)
     assert db_session.get(Listing, "2027").status == "sold"
+
+
+# --- strip_unverifiable_redirect_sales --------------------------------------
+#
+# 374 annunci Fiat il 23/08/2026: la loro pagina redirigeva alla lista del
+# modello, mai arricchiti (dealer_id assente), quindi twin_on_sale/republished
+# non avevano nulla con cui confrontarli. Passati come venduti non perche'
+# verificati, ma perche' privi dei dati per esserlo.
+
+def test_a_redirect_sale_with_no_dealer_id_is_stripped(db_session):
+    row = _listing(db_session, "redirect-ignoto", dealer=None, status="sold",
+                   sold_at=dt.datetime(2026, 8, 23, 13, 0))
+    row.redirect_to = "/lst/fiat/panda"
+    db_session.commit()
+
+    removed = strip_unverifiable_redirect_sales(db_session)
+
+    assert removed == 1
+    row = db_session.get(Listing, "redirect-ignoto")
+    assert row.status == "removed"
+    assert row.removal_reason == RemovalReason.REDIRECT_UNVERIFIED
+    assert row.sold_at is None, "non e' piu' contata come vendita, quindi niente data di vendita"
+
+
+def test_a_redirect_sale_with_a_known_dealer_is_left_alone(db_session):
+    """Se l'annuncio era gia' stato arricchito prima di sparire, ha un
+    dealer_id vero: twin_on_sale/republished possono giudicarlo col criterio
+    reale, e questa funzione non deve intromettersi."""
+    row = _listing(db_session, "redirect-noto", dealer=42, status="sold",
+                   sold_at=dt.datetime(2026, 8, 23, 13, 0))
+    row.redirect_to = "/lst/fiat/panda"
+    db_session.commit()
+
+    removed = strip_unverifiable_redirect_sales(db_session)
+
+    assert removed == 0
+    assert db_session.get(Listing, "redirect-noto").status == "sold"
+
+
+def test_a_sale_without_a_redirect_is_left_alone_even_with_no_dealer(db_session):
+    """Una vendita 404/410 pulita non ha bisogno di verifica: e' il redirect
+    a mancare di prova, non l'assenza del dealer da sola."""
+    row = _listing(db_session, "vendita-pulita", dealer=None, status="sold",
+                   sold_at=dt.datetime(2026, 8, 23, 13, 0))
+    db_session.commit()
+
+    removed = strip_unverifiable_redirect_sales(db_session)
+
+    assert removed == 0
+    assert db_session.get(Listing, "vendita-pulita").status == "sold"
+
+
+def test_a_redirect_that_is_not_sold_is_left_alone(db_session):
+    """Solo le vendite si ripuliscono: un annuncio ancora attivo o gia'
+    riclassificato altrimenti non e' affare di questa funzione."""
+    row = _listing(db_session, "ancora-attivo", dealer=None, status="active")
+    row.redirect_to = "/lst/fiat/panda"
+    db_session.commit()
+
+    removed = strip_unverifiable_redirect_sales(db_session)
+
+    assert removed == 0
