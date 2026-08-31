@@ -19,6 +19,7 @@ set -uo pipefail
 cd /home/vperrone/AutoSmart24 || exit 1
 
 API=http://localhost:8001
+PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
 ESITO=stato/riclassificazione.json
 
 # Il file di esito, chiesto dalla sessione BI il 07/08/2026. Lo leggono i loro
@@ -47,18 +48,47 @@ scrivi_esito() {
   mv -f "$tmp" "$ESITO"
 }
 
-# Aspetta la fine della scansione. Con un limite: un'attesa infinita
-# resterebbe a girare per sempre se un giro si blocca, e una riclassificazione
-# che non parte mai è più difficile da notare di una che dichiara di arrendersi.
-for i in $(seq 1 90); do   # x 120s = 3 ore
-  CUR=$(curl -s -m 10 "$API/queue" 2>/dev/null | grep -o '"current":null' || true)
-  [ -n "$CUR" ] && break
-  [ "$i" = "90" ] && {
-    echo "$(date '+%H:%M:%S') scansione ancora in corso dopo 3h — riclassificazione saltata"
-    scrivi_esito "scansione_in_corso" "la scansione notturna non era finita dopo 3h"
+# Aspetta che OGNI marca abbia completato un giro dopo le 22:00 di ieri sera --
+# non che la scansione sia "ferma".
+#
+# Corretto il 01/09/2026 su segnalazione della BI: "current: null" era la
+# condizione giusta quando un giro durava due ore, ma da quando la finestra e'
+# a 15 anni un giro dura 10-25 ore, e i trigger notturni ripartono ogni sera
+# indipendentemente da quello precedente -- quindi la coda puo' restare quasi
+# sempre occupata, e "ferma" non arriva piu'. La guardia delle tre ore non era
+# rotta: la premessa su cui era tarata (giro breve, coda che si svuota) e'
+# diventata falsa. Misurato: sette giorni di storico della BI persi in due
+# settimane, cinque per il PC spento e due proprio per questa attesa.
+#
+# La condizione nuova non dipende da quanto dura un giro ne' da quante volte
+# una marca viene ritentata: resta vera finche' ognuna ha almeno un successo
+# dopo la soglia, e vale anche se due giri si accavallano.
+WHEN="today 22:00"
+[ "$(date '+%H')" -lt 22 ] && WHEN="yesterday 22:00"
+SOGLIA_UTC=$(date -u -d "@$(date -d "$WHEN" +%s)" '+%Y-%m-%d %H:%M:%S')
+
+giro_completo() {
+  local mancanti
+  mancanti=$($PSQL -c "
+    SELECT count(*) FROM tracked_brands t WHERE NOT t.paused AND NOT EXISTS (
+      SELECT 1 FROM scrape_runs r WHERE r.brand = t.display_name
+        AND r.status IN ('success','blocked') AND r.started_at >= '$SOGLIA_UTC')
+  " 2>/dev/null | tr -d ' ')
+  [ "$mancanti" = "0" ]
+}
+
+# Limite comunque presente: un giro davvero bloccato (il guard di
+# BrandRunGuard incastrato, visto il 31/08 su Fiat) non deve far aspettare
+# questo script per sempre. 16,7 ore di margine, molto oltre i giri piu'
+# lunghi misurati finora, prima di arrendersi.
+for i in $(seq 1 200); do   # x 300s = 16h40
+  giro_completo && break
+  [ "$i" = "200" ] && {
+    echo "$(date '+%H:%M:%S') non tutte le marche hanno completato un giro dopo le 22:00 di ieri — riclassificazione saltata"
+    scrivi_esito "giro_incompleto" "non tutte le marche hanno un run completo dopo la soglia dopo 16h40"
     exit 1
   }
-  sleep 120
+  sleep 300
 done
 
 echo "=== riclassificazione avviata $(date '+%d/%m %H:%M:%S') ==="
