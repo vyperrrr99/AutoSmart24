@@ -13,6 +13,35 @@ rimandato e perché è la parte utile.
 
 ## Aperti
 
+### `BrandRunGuard` può restare bloccato per sempre senza guasto visibile
+
+Scoperto il 31/08/2026: Fiat non ha prodotto **nessuna** riga in `scrape_runs`
+dal 25/08 sera, per tre giorni interi, nonostante il suo trigger delle 22:00
+scattasse regolarmente ogni notte (`next_run` avanzava di un giorno alla
+volta) e la sua posizione in coda venisse mostrata normalmente
+(`/queue` la elencava sempre in posizione 6-7 con `eta_seconds: 0`).
+
+La causa più probabile: `BrandRunGuard` (`scheduler.py`) è un
+`set()` in memoria di processo che marca una marca come "in corso" con
+`try_acquire()` e la libera con `release()` in un blocco `finally`. Se il
+thread che detiene il lock **muore o resta bloccato senza mai raggiungere
+quel `finally`** — un kill del processo, un hang di rete non limitato dal
+timeout del client HTTP — il guard resta acquisito per sempre. Ogni tentativo
+successivo (cron notturno, retry, avvio manuale) trova `try_acquire()` che
+rifiuta silenziosamente: **nessuna riga creata, nessun evento loggato**,
+solo un `logger.warning` che non arriva a database. Da fuori è
+indistinguibile da "in coda, aspetta il suo turno" — motivo per cui c'è
+voluto un confronto esplicito fra `next_run` (che avanzava) e `scrape_runs`
+(che non si muoveva) per scoprirlo.
+
+Il guard vive nel processo `app`: un riavvio del container lo azzera. Fatto
+il 31/08 alle 23:xx — Fiat è ripartita al primo tentativo dopo il riavvio.
+
+**Manca un tetto**: nessun timeout libera il guard da solo se il thread che
+lo detiene sparisce. Andrebbe aggiunto — per esempio, scadenza sul lock, o un
+controllo che confronta periodicamente `BrandRunGuard._running` con i
+`scrape_runs` realmente in stato `running` e libera le marche orfane.
+
 ### `search_total` non è mai scritto
 
 Da fine luglio 2026. Zero riferimenti nel codice di produzione, zero giri con
