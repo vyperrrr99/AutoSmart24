@@ -7,10 +7,22 @@
 # Il 22/08 un'attesa a controllo singolo e' scattata proprio in quella
 # fessura, riavviando mentre il giro doveva continuare.
 #
-# Si arrende alle 21:30 per non interferire con il giro delle 22:00.
+# Scadenza a 20 ore dall'avvio, non a un'ora del giorno.
+#
+# Correzione del 02/09/2026: prima si arrendeva alle 21:30 "per non interferire
+# col giro delle 22:00", che presupponeva un giro finito da un pezzo. Con la
+# finestra a 15 anni un giro dura 10-25 ore e la coda e' quasi sempre occupata:
+# quella condizione poteva non verificarsi mai, e il riavvio non sarebbe mai
+# avvenuto. E' la stessa famiglia di errore corretta lo stesso giorno nella
+# riclassificazione notturna -- una soglia tarata su un mondo che poi si e'
+# mosso.
+#
+# Un riavvio fra un giro e l'altro va benissimo: il waiter aspetta comunque
+# che nessuna marca sia in corso, quindi non interrompe lavoro a meta'.
 set -uo pipefail
 cd /home/vperrone/AutoSmart24 || exit 1
 PSQL="sudo -n docker exec -i autosmart24-postgres-1 psql -U autosmart24 -tA -d autosmart24"
+SCADENZA=$(( $(date +%s) + 20*3600 ))
 
 libera() {
   local n
@@ -19,9 +31,8 @@ libera() {
 }
 
 while true; do
-  ORA=$(date '+%H%M')
-  if [ "$ORA" -ge 2130 ]; then
-    echo "$(date '+%d/%m %H:%M') le 21:30 sono passate — rinuncio, il giro delle 22:00 e' vicino"
+  if [ "$(date +%s)" -ge "$SCADENZA" ]; then
+    echo "$(date '+%d/%m %H:%M') venti ore senza una finestra libera — rinuncio"
     exit 1
   fi
   if libera; then
