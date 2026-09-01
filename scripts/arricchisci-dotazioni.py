@@ -23,7 +23,8 @@ chiudere -- 139 auto Lancia dichiarate vendute mentre erano tutte in vendita.
 
 Sicurezze, in ordine di quando scattano:
 
-  1. fuori dalla finestra oraria consentita: non parte
+  1. una scansione e' in corso: non parte (unico criterio dal 02/09/2026 --
+     la finestra oraria fissa e' stata tolta, vedi il commento su SCADENZA)
   2. una scansione e' in corso, o l'API non risponde: non parte
   3. raggiunta la scadenza a meta' blocco: si ferma e salva il punto
   4. il sito ci blocca (403/429): si ferma subito, senza insistere
@@ -58,8 +59,19 @@ FUSO = ZoneInfo("Europe/Rome")
 # 07:20; il backup della BI occupa le 07:30-07:45 e satura la banda in salita;
 # riclassificazione e lavori BI stanno fra le 09:00 e le 09:30. Restano le
 # 10:00-21:00, e ci teniamo un'ora abbondante di margine prima delle 22:00.
-ORA_INIZIO = 10
-ORA_FINE = 20  # ultimo blocco avviabile alle 20:xx, scadenza alle 21:00
+# La finestra oraria non e' piu' il criterio, dal 02/09/2026.
+#
+# Era 10:00-21:00, tarata su una scansione che finiva verso le 06:00. Con la
+# finestra a 15 anni un giro dura 10-25 ore e la coda e' quasi sempre occupata:
+# questo lavoro si e' rifiutato di partire 42 volte di fila e il suo ultimo
+# blocco completato e' del 20/08. Non era rotto -- rifiutava correttamente per
+# non pestare i piedi alla scansione -- ma la premessa oraria su cui era tarato
+# e' diventata falsa, e il lavoro e' morto in silenzio.
+#
+# Adesso l'unico criterio e' quello che conta davvero: la coda e' libera?
+# (`scanner_libero`, gia' presente). Il cron lo prova ogni ora, tutto il
+# giorno, e parte nella prima finestra che trova -- anche alle 04:00 se la
+# scansione ha chiuso presto.
 SCADENZA_MINUTI = 50  # un blocco non supera l'ora che gli e' stata data
 
 # Piu' gentile della scansione notturna: il sito e' gia' battuto otto ore a
@@ -123,29 +135,15 @@ def scanner_libero(conn) -> tuple[bool, str]:
     return True, ""
 
 
-def dentro_la_finestra(adesso: dt.datetime) -> tuple[bool, str]:
-    if not (ORA_INIZIO <= adesso.hour <= ORA_FINE):
-        return False, (f"sono le {adesso:%H:%M}: fuori dalla finestra "
-                       f"{ORA_INIZIO}:00-{ORA_FINE + 1}:00 — non parto")
-    return True, ""
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--blocco", type=int, default=BLOCCO,
                     help="quante auto in questo blocco")
     ap.add_argument("--scadenza-minuti", type=int, default=SCADENZA_MINUTI)
     ap.add_argument("--concorrenza", type=int, default=CONCORRENZA)
-    ap.add_argument("--ignora-finestra", action="store_true",
-                    help="solo per prove manuali sorvegliate")
     args = ap.parse_args()
 
     adesso = _ora_locale()
-    if not args.ignora_finestra:
-        ok, perche = dentro_la_finestra(adesso)
-        if not ok:
-            print(f"  {perche}")
-            return 0
     scadenza = time.monotonic() + args.scadenza_minuti * 60
     cursore = _leggi_cursore()
     engine = create_engine(os.environ["DATABASE_URL"])

@@ -46,7 +46,17 @@ MIN_USED_CAR_KM = 1000
 # volte: a concorrenza 8 dopo 24 minuti, a concorrenza 5 dopo 83. Ogni volta la
 # coda si e' fermata, e con essa tutte le marche successive.
 #
-# 2.000 pagine sono circa 40 minuti a concorrenza 5: sotto la soglia a cui
-# siamo stati bloccati, e un arretrato come quello di Fiat si smaltisce in sei
-# notti senza che nessuna di esse esca dai binari.
-DETAIL_PAGES_PER_RUN = 2000
+# Alzato da 2.000 a 4.000 il 02/09/2026. La causa vera dei tre blocchi non era
+# il volume ma il difetto dei redirect -- una pagina sparita rimandava alla
+# lista del modello e la scaricavamo, migliaia di volte sullo stesso URL --
+# corretto il 22/08. Da allora: 114 giri completati, zero blocchi.
+#
+# A 2.000 il tetto era diventato il collo di bottiglia invece della protezione:
+# Fiat aveva 5.162 pagine disponibili e ne leggeva 1.995, fermandosi sul limite
+# tre giri di fila senza mai chiudere l'arretrato. Misurato sul giro del 31/08:
+# 1.995 pagine in 122 minuti, quindi raddoppiare il tetto costa circa due ore
+# in piu' e solo alle due o tre marche che un arretrato ce l'hanno davvero.
+#
+# NON si alza oltre: il tetto esiste perche' senza di esso la durata del giro
+# la decide l'arretrato e non noi, e quella protezione va conservata.
+DETAIL_PAGES_PER_RUN = 4000

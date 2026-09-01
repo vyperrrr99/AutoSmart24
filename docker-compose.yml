@@ -45,7 +45,14 @@ services:
       # Da notare: la concorrenza non e' la causa dei blocchi su Fiat. Dei tre,
       # due sono avvenuti a 8 (19/08 e 22/08, dopo 24 e 25 minuti) e uno a 5
       # (21/08, dopo 83). Scendere allunga la resistenza, non la garantisce.
-      SCRAPE_CONCURRENCY: "5"
+      #
+      # Portata a 6 il 02/09/2026, un passo solo e non il ritorno a 8. La causa
+      # vera dei blocchi era il difetto dei redirect, corretto il 22/08: da
+      # allora 114 giri completati e zero blocchi. Ma quella e' evidenza che a 5
+      # non ci blocchiamo, non che a 8 andremmo bene -- l'unico dato su 8 sono
+      # due blocchi su due. Sei e' il passo piu' grande giustificabile dai dati
+      # che abbiamo; per andare oltre servono altre settimane pulite a 6.
+      SCRAPE_CONCURRENCY: "6"
       SCRAPE_MAX_LISTING_AGE_YEARS: "5"
       SCRAPE_SESSION_REFRESH_REQUESTS: "30"
     ports:
