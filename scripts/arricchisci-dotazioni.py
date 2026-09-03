@@ -25,13 +25,14 @@ Sicurezze, in ordine di quando scattano:
 
   1. una scansione e' in corso: non parte (unico criterio dal 02/09/2026 --
      la finestra oraria fissa e' stata tolta, vedi il commento su SCADENZA)
-  2. una scansione e' in corso, o l'API non risponde: non parte
-  3. raggiunta la scadenza a meta' blocco: si ferma e salva il punto
-  4. il sito ci blocca (403/429): si ferma subito, senza insistere
+  2. raggiunta la scadenza a meta' blocco: si ferma e salva il punto
+  3. il sito ci blocca (403/429): si ferma subito, senza insistere
 
 Il punto di ripartenza sta in stato/dotazioni-cursore.json: si procede per id
 crescente, cosi' un'auto la cui pagina non ha dato nulla non viene ritentata
-per sempre.
+per sempre. Quando il cursore arriva in fondo ma restano auto dietro di lui --
+arricchite dal giro notturno dopo il suo passaggio -- riparte da capo invece di
+dichiarare concluso il lavoro.
 """
 from __future__ import annotations
 
@@ -55,10 +56,6 @@ from autosmart24.scraping.http_client import BlockedError, make_client  # noqa: 
 CURSORE = "/app/stato/dotazioni-cursore.json"
 FUSO = ZoneInfo("Europe/Rome")
 
-# La finestra: lo scraper parte alle 22:00 locali e finisce fra le 05:00 e le
-# 07:20; il backup della BI occupa le 07:30-07:45 e satura la banda in salita;
-# riclassificazione e lavori BI stanno fra le 09:00 e le 09:30. Restano le
-# 10:00-21:00, e ci teniamo un'ora abbondante di margine prima delle 22:00.
 # La finestra oraria non e' piu' il criterio, dal 02/09/2026.
 #
 # Era 10:00-21:00, tarata su una scansione che finiva verso le 06:00. Con la
@@ -160,6 +157,35 @@ def main() -> int:
             "SELECT id, url FROM listings WHERE status='active' AND detail_scraped "
             "AND equipment IS NULL AND id > :c ORDER BY id LIMIT :n"),
             {"c": cursore, "n": args.blocco}).fetchall()
+
+    # Il cursore e' arrivato in fondo ma restano auto dietro di lui: si
+    # ricomincia da capo invece di dichiarare finito.
+    #
+    # Il cursore serve a non ritentare all'infinito una pagina che non da'
+    # nulla, e per quello va benissimo. Ma il parco non e' fermo: ogni notte
+    # il giro arricchisce annunci nuovi, e quelli hanno UUID casuali, quindi
+    # meta' cadono DIETRO al cursore e non venivano piu' guardati. Dal 20/08
+    # il cursore era su 'fffff367...' (praticamente l'ultimo UUID possibile) e
+    # il lavoro dichiarava "completo" undici volte al giorno mentre 2.356 auto
+    # arricchite il 2 e 3 settembre restavano senza dotazioni per sempre.
+    #
+    # Azzerare e ripartire costa poco: le auto gia' fatte hanno equipment
+    # valorizzato e la query le esclude da sola, quindi il giro successivo
+    # trova solo il residuo vero.
+    if not righe and cursore:
+        with engine.connect() as conn:
+            rimaste = conn.execute(text(
+                "SELECT count(*) FROM listings WHERE status='active' "
+                "AND detail_scraped AND equipment IS NULL")).scalar()
+        if rimaste:
+            print(f"  cursore in fondo ma restano {rimaste} auto dietro: riparto da capo")
+            _scrivi_cursore("", 0)
+            with engine.connect() as conn:
+                righe = conn.execute(text(
+                    "SELECT id, url FROM listings WHERE status='active' AND detail_scraped "
+                    "AND equipment IS NULL ORDER BY id LIMIT :n"),
+                    {"n": args.blocco}).fetchall()
+            cursore = ""
 
     if not righe:
         print("  nessuna auto da trattare: il recupero e' completo")
